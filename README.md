@@ -87,6 +87,9 @@ python scripts/life_order.py --db cbdb_20260926.sqlite3 --person 30374  # 单人
 
 ## 3. 新增的知识图谱（Owlready2 + RDF/OWL）
 
+> 本节是概览；**完整的知识图谱文档（本体、ETL 铁律、查询底座、Q1–Q9、验证、导出）见
+> [`kg/README.md`](./kg/README.md)**，界面代码结构见 [`kg/app/README.md`](./kg/app/README.md)。
+
 ### 3.1 本体设计（TBox v1.0，已冻结）
 
 设计文档：`kg/TBOX_v1.0.md`；本体实现：`kg/tbox_cbdb.py`（Owlready2）。
@@ -245,6 +248,7 @@ cbdb_sqlite/
 ├── latest.json              版本元数据（发布日期 / 文件名 / sha256 / HF 直链）
 ├── scripts/                 下载与后处理脚本（外键 / 18 视图 / ADDRESSES / 5 分析视图 / 区间轴 / 体检）
 ├── kg/                      知识图谱
+│   ├── README.md            知识图谱总览（本体 / ETL / 查询 / 验证 / 导出的完整说明）
 │   ├── tbox_cbdb.py         TBox v1.0 本体（Owlready2）
 │   ├── etl_seed_ming.py     种子集 ETL（默认明朝）
 │   ├── kg_graph.py          quadstore → 内存谓词子图索引（GraphIndex）
