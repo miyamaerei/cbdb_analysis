@@ -6,6 +6,56 @@
 
 ---
 
+## 界面预览
+
+查询台顶部共三个模式：**人物年谱**（单人纵向）· **视图检索**（24 个视图横向检索）· **知识图谱**（图上的多跳遍历）。
+截图均为本机实跑界面（`web/frontend` 的 `vite build` 产物，由 `web/server.py` 托管）。
+
+### ① 视图检索（`web/`）
+
+24 个数据集分 9 组，**每个视图的查询条件都按该视图自身的列自动生成**。结果表点带 🔗 的关联键，
+可按分组跳到其它含同一键的视图（下钻）。
+
+![视图检索 · 结果表](image/表查询_db.png)
+
+### ② 人物年谱（`web/`）
+
+单人纵向视图：**区间甘特年谱**（灰条＝传播前的先验区间，彩条＝传播后的区间，蓝底带＝生卒范围）、
+一跳关系环形图、人物档案、预设查询、SQL 沙盒。数据底座是物化表 `LIFE_EVENT_RESOLVED`。
+
+![人物年谱 · 区间年谱](image/用户检索_db.png)
+
+「预设查询」页内置报告里的查询 Cookbook（如「年谱最完整的人物 TOP20」「各阶段时间轴分布」）。
+下图示例：点开「预设查询」查看 **年谱最完整的人物 TOP20**（周必大 359 条 / 朱熹 305 条 / 康有為 265 条 …）。
+
+![人物年谱 · 预设查询](image/预设推理_db.png)
+
+### ③ 知识图谱（`kg/` 接口 + `web/` 界面）
+
+**检索**：按姓名在指定朝代图谱中检索，自动做简繁扩展 + 别名/字号回退链
+（下图输入「王阳明」0 命中 → 自动改用「陽明」匹配到 **王守仁**，并提示回退原因）。
+
+![知识图谱 · 检索](image/用户查询_kg.png)
+
+**详情**：人物完整档案（基本 / 别名 / 亲属 / 地址 / 任职 / 入仕 / 身份 / 著作 / 史料 / 交遊），
+由内存谓词索引 `GraphIndex` 直接生成（不再开 owlready2 World）。
+
+![知识图谱 · 详情（完整档案）](image/本体构建_kg.png)
+
+**专题**：Q1–Q9 九个专题（完整档案 / 亲属关系 / 亲属关系网 / 师承链 / 同年进士 / 任职网络 /
+同里籍贯 / 著作来源 / 学派主题网），表单由 `kg/topic_dispatcher.py` 的 `TOPIC_SCHEMA` 自动渲染。
+
+![知识图谱 · 专题列表](image/推理1_kg.png)
+
+查询结果直接出表（Q3 亲属关系网 / Q9 学派主题网 另出力导向图）。下图示例：以「1499 年」查**同年进士**，
+再按人反查其同年名次分布。
+
+![知识图谱 · 专题 · 同年进士](image/推理_kg.png)
+
+> 三个模式的启动方式见 [§5 如何运行与使用](#5-如何运行与使用)。
+
+---
+
 ## 0. 原项目地址（公开数据源）
 
 本仓库的所有人物数据均来自 **中国历代人物传记资料库（China Biographical Database, CBDB）**，
@@ -124,7 +174,7 @@ owlready2 自带 SPARQL 解析器不支持尖括号 IRI、不支持属性路径�
 
 ### 3.4 专题查询 Q1–Q9（`kg/kg_query.py`）
 
-实现研究文档 §9 的 9 条图谱查询，**不依赖 Gradio、可单独自检**（`python -c "import kg_query"`）：
+实现研究文档 §9 的 9 条图谱查询，**不依赖界面框架、可单独自检**（`python -c "import kg_query"`）：
 
 | 编号 | 函数 | 专题 |
 |---|---|---|
@@ -218,30 +268,34 @@ python scripts/life_order.py --db cbdb_20260926.sqlite3 --all --write
 
 > 所有脚本的 `--db` / 路径参数都**相对仓库根目录**，克隆到任意路径即可直接跑（已脱敏，无本机绝对路径）。
 
-### 5.3 启动 Gradio 查询台（桌面式，13 个 Tab）
+### 5.3 启动查询台（Vue 网页，8787 + 知识图谱接口 8799）
+
+界面只有一套：Vue 查询台（顶部三模式：人物年谱 / 视图检索 / 知识图谱）。
+**「视图检索」与「人物年谱」只需要 8787**；要用「知识图谱」模式则再起 8799。
 
 ```bash
-python kg/app_gradio.py --port 7860 --no-browser
-# 打开 http://127.0.0.1:7860
-```
-
-功能：人物检索、详情档案、导出 CSV/JSON、Q1–Q9 专题查询、一键构建知识图谱。
-支持按姓名（简繁自动扩展）/ 朝代 / 生卒年区间检索；双击结果行跳转详情。
-
-### 5.4 启动 Web 查询台（Vue 3 网页，零后端依赖）
-
-```bash
-# 后端（Python 标准库，无第三方依赖，默认 8787）
+# 1) 查询台后端（Python 标准库，无第三方依赖，默认 8787）
 python web/server.py --db cbdb_20260926.sqlite3 --port 8787
-# 浏览器打开 http://127.0.0.1:8787/
+#    浏览器打开 http://127.0.0.1:8787/
+
+# 2)（可选，仅「知识图谱」模式需要）知识图谱接口服务（8799）
+#    ⚠️ 必须用装了 owlready2 / zhconv 的解释器，见 §5.1
+<venv>/Scripts/python.exe kg/api_server.py --port 8799      # Windows
+<venv>/bin/python         kg/api_server.py --port 8799      # macOS / Linux
 ```
 
-- 两种模式：**人物年谱**（单人纵向：区间甘特年谱 / 关系网络 / 档案 / 预设查询 / SQL 沙盒）与**视图检索**（24 个数据集 × 9 组，元数据驱动的条件卡片 + 关联键下钻）。
-- 查询条件的唯一来源是 `web/view_meta.json`（由 `web/build_view_meta.py` 剖析 24 个视图生成，改库/改分组后需重跑，约 45s）。
+- `web/server.py` 会把 `/api/kg/*` **同源反代**到 8799（含 `text/event-stream` 的分块转发），
+  所以前端一律走相对路径，无跨域问题；8799 没起时知识图谱接口返回 502 提示。
+- 两个服务都要**常驻**（用后台方式启动；不要用会被回收的 `&` 子壳，否则表现为「日志为空、端口连不上」）。
+- 三模式能力概览：
+  - **视图检索** — 24 个数据集 × 9 组，元数据驱动的条件抽屉 + 关联键下钻；查询条件唯一来源是
+    `web/view_meta.json`（由 `web/build_view_meta.py` 剖析 24 个视图生成，改库/改分组后需重跑，约 45s）。
+  - **人物年谱** — 单人纵向：区间甘特年谱 / 关系网络 / 档案 / 预设查询 / SQL 沙盒。
+  - **知识图谱** — 检索 / 详情 / 专题 Q1–Q9（Q3·Q9 带力导向图）/ 导出 CSV / 构建（SSE 流式 ETL）。
 - 数据库以 `mode=ro` + `query_only=ON` 打开，SQL 沙盒另做关键字黑名单，只读安全。
-- API 清单见 `web/README.md`。
+- API 清单见 `web/README.md`（关系表侧）与 `kg/README.md` §6（图谱侧）。
 
-### 5.5 构建知识图谱（见 §3.5）
+### 5.4 构建知识图谱（见 §3.5）
 
 ```bash
 python kg/etl_seed_ming.py --db cbdb_20260926.sqlite3 --dy 19
@@ -254,28 +308,36 @@ python kg/etl_seed_ming.py --db cbdb_20260926.sqlite3 --dy 19
 ```
 cbdb_sqlite/
 ├── README.md                本文件
-├── requirements.txt         Python 依赖（gradio / owlready2 / zhconv，kg 查询台用）
+├── requirements.txt         Python 依赖（owlready2 + zhconv，仅 kg/ 接口服务与 ETL 需要）
 ├── LICENSE                  许可法律条款（CC BY-NC-SA 4.0）
 ├── NOTICE.md                版权声明 / CBDB 引用要求 / 免责声明
 ├── CITATION.cff             机器可读引用元数据（GitHub「Cite this repository」）
 ├── latest.json              版本元数据（发布日期 / 文件名 / sha256 / HF 直链）
+├── image/                   README 用的界面截图
 ├── scripts/                 下载与后处理脚本（外键 / 18 视图 / ADDRESSES / 5 分析视图 / 区间轴 / 体检）
-├── kg/                      知识图谱
+├── kg/                      知识图谱（逻辑层 + HTTP 接口，**无界面框架**）
 │   ├── README.md            知识图谱总览（本体 / ETL / 查询 / 验证 / 导出的完整说明）
 │   ├── tbox_cbdb.py         TBox v1.0 本体（Owlready2）
-│   ├── etl_seed_ming.py     种子集 ETL（默认明朝）
+│   ├── etl_seed_ming.py     种子集 ETL（默认明朝，--dy 可换朝代）
 │   ├── kg_graph.py          quadstore → 内存谓词子图索引（GraphIndex）
-│   ├── kg_query.py          Q1–Q9 专题查询实现
+│   ├── kg_query.py          Q1–Q9 专题查询实现（纯函数）
 │   ├── kg_backend.py        检索 / 详情 / 导出 / 跑 ETL 的后端
+│   ├── topic_dispatcher.py  Q1–Q9 的声明式字段规格（TOPIC_SCHEMA）+ 调度
+│   ├── api_server.py        HTTP 接口服务（端口 8799）→ /api/kg/*
 │   ├── kg_stats.py          图谱验收脚本
-│   ├── app_gradio.py         Gradio 查询台入口（瘦）
 │   ├── TBOX_v1.0.md         本体设计冻结文档
-│   └── app/                 查询台 UI（shared / components / handlers / specs / page_*）
-├── web/                     网页查询台
-│   ├── server.py           只读 API + 静态托管（Python 标准库）
+│   └── quadstore/           图谱产物 ★gitignore（单个数百 MB）
+├── web/                     网页查询台（三模式共用同一前端）
+│   ├── README.md           查询台说明（模式 / 条件来源 / API / 中文化）
+│   ├── server.py           只读 API + 静态托管 + /api/kg/* 同源反代（Python 标准库）
 │   ├── build_view_meta.py  剖析视图 → view_meta.json
-│   ├── view_meta.json       生成物（约 280KB）
+│   ├── columns_zh.py       列名 / 视图名的中文标签表
+│   ├── view_meta.json      生成物（约 325 KB）
+│   ├── FILTER_UX.md        条件区与布局改造的设计依据
 │   └── frontend/           Vue 3 + Vite 源码（src/ + dist/）
+│       └── src/components/ ViewExplorer / ViewNav / FilterControl /
+│                           IntervalTimeline / RelationNetwork / DataTable /
+│                           KgExplorer（知识图谱五 Tab）/ KgGraph（vis-network 力导向图）
 ├── CBDB_SQLite_使用报告.md   使用报告（视图/年谱/查询设计详解）
 ├── CBDB_知识图谱本体设计研究.md  知识图谱本体设计研究报告
 └── 表分类速查.md            码表分类速查

@@ -98,7 +98,7 @@ https://github.com/miyamaerei/cbdb_analysis.
 |---|---|---|
 | CBDB 数据 | 由哈佛大学、中央研究院、北京大学合作维护；本仓库不包含任何数据文件 | CC BY-NC-SA 4.0 |
 | `cbdb-project/cbdb_sqlite` | 本仓库的直接上游（下载与后处理脚本） | 未声明许可证 |
-| Owlready2 / Gradio / Vue / Vite | 第三方依赖，各自遵循其原始许可 | 见各自项目 |
+| Owlready2 / zhconv / Vue / Vite / vis-network | 第三方依赖，各自遵循其原始许可 | 见各自项目 |
 
 ---
 

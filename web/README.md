@@ -1,26 +1,40 @@
 # CBDB 查询台（Vue 3 前端 + 零依赖后端）
 
-基于《CBDB_SQLite_使用报告.md》做的查询页面。核心不是"按年份排序"，而是展示报告 §6.8 的
-**区间轴 + 序轴 + 精度轴**：每条生平事件是一个区间 `[lo, hi]`，而不是一个假年份。
+基于《CBDB_SQLite_使用报告.md》做的查询页面，共 **三个模式**：
+**人物年谱**（单人纵向）· **视图检索**（24 个视图横向检索）· **知识图谱**（图上的多跳遍历）。
 
-## 启动（两步）
+其中两处的底座值得单独说明：
+
+- **人物年谱**：核心不是"按年份排序"，而是展示报告 §6.8 的
+  **区间轴 + 序轴 + 精度轴**——每条生平事件是一个区间 `[lo, hi]`，而不是一个假年份。
+- **知识图谱**：走 `kg/` 的 HTTP 接口（8799），由 `server.py` 同源反代 `/api/kg/*`。
+  本目录只负责界面，图谱侧的本体 / ETL / 查询逻辑见 [`../kg/README.md`](../kg/README.md)。
+
+## 启动（两步 + 可选第三步）
 
 ```bash
-# 1) 后端：只读 API，默认 8787
+# 1) 后端：只读 API + 静态托管，默认 8787
 python web/server.py --db cbdb_20260926.sqlite3 --port 8787
 
 # 2) 打开浏览器
 #    http://127.0.0.1:8787/
+
+# 3)（可选）仅「知识图谱」模式需要：知识图谱接口服务 8799
+#    必须用装了 owlready2 / zhconv 的解释器
+<venv>/Scripts/python.exe kg/api_server.py --port 8799     # Windows
+<venv>/bin/python         kg/api_server.py --port 8799     # macOS / Linux
 ```
 
 后端会直接托管已构建好的 `web/frontend/dist`，**不需要另开 Vite**。
+「视图检索」与「人物年谱」只用 8787；没起 8799 时「知识图谱」模式的接口会返回 502 提示，
+页面本身仍能打开。
 
 ### 开发模式（改前端时）
 
 ```bash
 cd web/frontend
 npm install
-npm run dev          # http://localhost:5173 ，/api 已代理到 8787
+npm run dev          # http://localhost:5173 ，/api 已代理到 8787，/api/kg 已代理到 8799
 npm run build        # 产出 dist/，交给 server.py 托管
 ```
 
@@ -30,14 +44,17 @@ npm run build        # 产出 dist/，交给 server.py 托管
 
 ## 页面结构
 
-顶部有两个主模式：
+顶部三个主模式（同一顶栏切换，共用同一份只读 API 与静态托管）：
 
-| 模式 | 用途 |
-|---|---|
-| **人物年谱** | 单人纵向视图：搜一个人，看他的区间年谱 / 关系网络 / 档案 / 预设查询 / SQL 沙盒 |
-| **视图检索** | 横向视图：24 个数据集分成 9 组，**每个视图都有按自身列自动生成的查询条件** |
+| 模式 | 用途 | 依赖 |
+|---|---|---|
+| **人物年谱** | 单人纵向视图：搜一个人，看他的区间年谱 / 关系网络 / 档案 / 预设查询 / SQL 沙盒 | 仅 8787 |
+| **视图检索** | 横向视图：24 个数据集分成 9 组，**每个视图都有按自身列自动生成的查询条件** | 仅 8787 |
+| **知识图谱** | 图上的多跳遍历：检索 / 详情 / 专题 Q1–Q9（Q3·Q9 带力导向图）/ 导出 CSV / 构建 ETL | 另需 8799 |
 
 ### 视图检索模式：导航与下钻
+
+![视图检索 · 结果表](../image/表查询_db.png)
 
 24 个视图（23 个 `View_*` + 物化结果表 `LIFE_EVENT_RESOLVED`）按「能否用同一个键互相下钻」分成 9 组：
 
@@ -144,7 +161,37 @@ python web/build_view_meta.py --labels-only
 | 预设查询 | 报告里的 15 条 Cookbook 查询，一键执行 |
 | SQL 沙盒 | 只读 SELECT / WITH，20 秒超时，最多 2000 行 |
 
+![人物年谱 · 区间年谱](../image/用户检索_db.png)
+
+### 知识图谱模式
+
+界面是 `KgExplorer.vue`，数据来自 `kg/api_server.py`（8799，由本目录的 `server.py` 同源反代）。
+内部五个 Tab：
+
+| Tab | 内容 |
+|---|---|
+| 检索 | 按姓名（简繁自动扩展 + 别名/字号回退链）/ 朝代 / 生卒区间 / 进士 / 官员检索；点行跳详情 |
+| 详情 | 人物档案 8 个分区表（亲属/交遊/任职/入仕/地址/身份/著作/史料）；所选朝代图谱里没有此人时回退源库基本信息 |
+| 专题 | Q1–Q9（完整档案 / 亲属关系 / 亲属关系网 / 师承链 / 同年进士 / 任职网络 / 同里籍贯 / 著作来源 / 学派主题网）。**表单由后端 `topic_dispatcher.TOPIC_SCHEMA` 自动渲染**，加查询不用改 Vue；Q3/Q9 **额外出力导向图**（`KgGraph.vue` + vis-network，点节点跳详情） |
+| 导出 | 把「检索」页当前条件命中的**全部**人物导出 CSV（utf-8-sig，ASCII 文件名；与屏幕分页无关） |
+| 构建 | 在界面上跑 ETL 构建新朝代图谱，**SSE 流式显示日志**，结束后自动刷新图谱清单 |
+
+![知识图谱 · 检索](../image/用户查询_kg.png)
+
+![知识图谱 · 专题](../image/推理1_kg.png)
+
+- **检索走 SQL、详情走图**：检索用源库现成索引（1.7 秒内），详情用 quadstore 的内存谓词子图索引
+  `GraphIndex`（单人全量 <0.1 秒）。两条链路分开是因为开图慢、写十几条 SQL 又太脏。
+- 首次点开某朝代图谱时，后端要把该 quadstore 的谓词子图抽进内存（明 587MB 约十几秒），
+  之后全是毫秒级字典查找；`kg_graph.get_index()` 用双检锁防止并发重复构建。
+- CBDB 全库是**繁体**：输入「王阳明」原名 0 命中，回退链会自动改用别名「陽明」命中 **王守仁**，
+  并在结果上方提示回退原因。
+
+> 图谱侧的完整说明（本体 / ETL 铁律 / Q1–Q9 / 接口一览 / 常见问题）见 [`../kg/README.md`](../kg/README.md)。
+
 ## API
+
+### 关系表侧（本服务直供）
 
 | 接口 | 说明 |
 |---|---|
@@ -165,22 +212,38 @@ python web/build_view_meta.py --labels-only
 数据库以 `mode=ro` + `PRAGMA query_only=ON` 打开，SQLite 层面禁止写入；
 SQL 沙盒另做了关键字黑名单与单语句校验。
 
+### 知识图谱侧（同源反代 `/api/kg/*` → 8799）
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/kg/health` · `/dynasties` · `/quads` · `/topics` | 元信息与下拉选项（朝代 / 图谱清单 / 专题 schema） |
+| `GET /api/kg/person/<id>` | 图谱人物详情（自动挑含此人的图谱；都没有则回退源库基本信息） |
+| `POST /api/kg/search` | 图谱检索（简繁 + 别名/字号回退链，返回 14 列对齐的数组行） |
+| `POST /api/kg/topic` | Q1–Q9 专题查询（`{"key","quad","vals":[…]}`） |
+| `POST /api/kg/export` | 导出 CSV（`Content-Disposition` 里是 ASCII 文件名，反代会透传） |
+| `POST /api/kg/build` | ETL 构建，**SSE 流式**日志 |
+
+> ⚠️ 两个实现细节：① `/api/kg/export` 的文件名必须是 ASCII——HTTP 头按 latin-1 编码，
+> 中文文件名会抛 `UnicodeEncodeError`；② `/api/kg/build` 的 SSE 上游必须
+> `close_connection = True`，否则 HTTP/1.1 keep-alive 不发 EOF，反代的分块循环读不到结束，
+> 前端日志会一直挂着。反代本身也已从「一次 `read()` 到底」改成分块转发，否则流会被缓冲住。
+
 ## 文件
 
 ```
 web/
-  server.py              只读 API + 静态托管（Python 标准库，无第三方依赖）
+  server.py              只读 API + 静态托管 + /api/kg/* 同源反代（Python 标准库，无第三方依赖）
   build_view_meta.py     剖析 24 个视图 → view_meta.json（前端查询条件与中文标签的唯一来源）
   columns_zh.py          列名 / 视图名的中文标签表（人写的，改这里不用连库）
   view_meta.json         生成物（约 325 KB），改库或改分组后需重跑
   FILTER_UX.md           条件区与布局改造的设计依据与方案对比
   frontend/
-    package.json / vite.config.js
+    package.json / vite.config.js   依赖：Vue 3 + Vite + vis-network；/api/kg 先于 /api 代理
     index.html
     src/
       main.js
-      api.js
-      App.vue                        单行顶栏、模式切换、人物页布局、体检条、SQL 沙盒、深链恢复
+      api.js                         全部接口调用（含 kgPerson/kgTopic/kgExport/kgBuild 流式）
+      App.vue                        单行顶栏、三模式切换、人物页布局、体检条、SQL 沙盒、深链恢复
       style.css
       components/
         ViewNav.vue                  视图导航条（分组 tab + 视图下拉 + 全部视图浮层）
@@ -188,7 +251,10 @@ web/
         FilterControl.vue            单个可筛列的条件控件（抽屉 / 浮层共用）
         IntervalTimeline.vue         区间甘特时间轴（核心）
         RelationNetwork.vue          一跳关系环形图
-        DataTable.vue                通用结果表
+        PersonSearch.vue             人物定位搜索（年谱模式顶部）
+        DataTable.vue                通用结果表（同时支持「数组行」与「对象行」两种数据形态）
+        KgExplorer.vue               知识图谱（检索 / 详情 / 专题 / 导出 / 构建 五个 Tab）
+        KgGraph.vue                  力导向图（vis-network；Q3 家族网 / Q9 学派网）
 ```
 
 ### 重建元数据

@@ -184,7 +184,7 @@ owlready2 的 `World` 会**长期持有 quadstore 的写事务**，导致 `kg_gr
 
 ## 5. 专题查询 Q1–Q9
 
-实现全在 [`kg_query.py`](./kg_query.py)，**不依赖 Gradio，可单独自检**：
+实现全在 [`kg_query.py`](./kg_query.py)，**不依赖任何界面框架，可单独自检**：
 
 ```bash
 python -c "import kg_query"          # 只验证能否导入
@@ -235,6 +235,23 @@ Gradio 界面已删除。现在 GraphIndex 之上只暴露 HTTP 接口，界面�
 | 导出 | 把当前检索条件命中的人物导出 CSV（utf-8-sig，ASCII 文件名） |
 | 构建 | 界面上跑 ETL 构建新朝代图谱，**SSE 流式显示日志**，完成后自动刷新图谱清单 |
 
+![知识图谱 · 检索](../image/用户查询_kg.png)
+
+输入「王阳明」原名 0 命中 → 自动改用别名「陽明」命中 **王守仁（person/30374）**，
+结果表 14 列 = `RESULT_HEADERS`，并给出回退说明。
+
+![知识图谱 · 详情（完整档案）](../image/本体构建_kg.png)
+
+详情页（`生成档案`）一键拉出 10 个分区：基本档案 / 别名 / 亲属 / 地址 / 任职 / 入仕 / 身份 / 著作 / 史料 / 交遊。
+全程只读 GraphIndex，不开 owlready2 World。
+
+![知识图谱 · 专题列表](../image/推理1_kg.png)
+
+![知识图谱 · 专题 · 同年进士](../image/推理_kg.png)
+
+九个专题共用一份声明式 schema；上面第二张示例：给年份 1499 查**同年进士**（命中 305 人），
+也给某人反查其同年名次分布。
+
 接口一览（前端走同源相对路径，由 `web/server.py` 反代到 8799）：
 
 | 方法 | 路径 | 说明 |
@@ -267,28 +284,47 @@ curl --noproxy '*' http://127.0.0.1:8799/api/kg/quads
 curl --noproxy '*' -X POST http://127.0.0.1:8799/api/kg/search \
      -H 'Content-Type: application/json' -d '{"dy":19,"name":"王阳明","limit":5}'
 curl --noproxy '*' http://127.0.0.1:8799/api/kg/person/30374
+
+# 专题 / 导出 / 构建（走前端真实路径：8787 反代）
+MING="$(pwd)/kg/quadstore/cbdb_dy19.sqlite3"
+curl --noproxy '*' -X POST http://127.0.0.1:8787/api/kg/topic \
+     -H 'Content-Type: application/json' -d "{\"key\":\"Q6\",\"quad\":\"$MING\",\"vals\":[30374]}"
+curl --noproxy '*' -D - -o /tmp/kg.csv -X POST http://127.0.0.1:8787/api/kg/export \
+     -H 'Content-Type: application/json' -d '{"dy":19,"name":"王阳明","limit":6}'   # 看 Content-Disposition
+curl --noproxy '*' --no-buffer -X POST http://127.0.0.1:8787/api/kg/build \
+     -H 'Content-Type: application/json' -d '{"dy":55,"limit":0}'                    # 末尾应有 {"done":true}
 ```
 
-冒烟测试必须走 HTTP 而非手动点界面——手动测不出「浏览器实际提交值」（如空 Number 会变成 `0`）。
-各页按钮都有**显式 `api_name`**（`Q2_run` / `detail_load` / `search_query` …），
-自动编号的 `_run_1` 会随页面顺序漂移，不能用。
+**验证一律走 HTTP，不要手动点界面**——手动测不出「浏览器实际提交值」（如空数字输入会变成 `0`），
+也测不出反代与流式转发这类只在链路上才暴露的问题。建议用**未构建过的小朝代**（如 `dy=55`）
+试 `build`，避免覆盖已有 quadstore；测完记得删掉 `quadstore/cbdb_dy55.sqlite3*` 产物。
 
 ---
 
-## 8. 导出目录
+## 8. 导出
 
-导出落在 `kg/exports/<条件slug>_<YYYYMMDD>/`（重名自动追加 `_2`、`_3`）：
+界面上「导出」Tab 走 `POST /api/kg/export`：按「检索」页当前条件重跑一遍检索，
+把**命中全集**（与屏幕分页、列勾选无关）写成 CSV 直接下载，文件名形如 `cbdb_kg_dy19_6.csv`。
+
+- 编码 **utf-8-sig**（Excel 直接打开不乱码）；
+- 文件名刻意只用 ASCII——HTTP 头按 latin-1 编码，中文文件名会抛 `UnicodeEncodeError`；
+- `Content-Disposition` 由 `web/server.py` 的反代**透传**，否则前端拿不到文件名（下载后是随机 blob 名）。
+
+### 目录式导出（`export_results` / `export_page`，暂未接进界面）
+
+`kg_backend.py` 里还留着一套「导出成目录、带条件留痕」的实现（原来由 Gradio 导出页调用）：
 
 ```
 kg/exports/①_完整档案_person30374_20260930/
-  ├── 档案明细.csv        结果数据（utf-8-sig，Excel 直接打开不乱码）
+  ├── 档案明细.csv        结果数据（utf-8-sig）
   ├── 档案明细.json
   ├── conditions.json     复现所需的全部条件 + 导出时间 + 各表行数
   └── README.md           人类可读的条件摘要（结果为空时只有这一个文件）
 ```
 
-`conditions.json` 里会记下当时的 quadstore 与源库路径，便于回溯。加 `with_detail=True`
-还会附带 `details/` 子目录（每人一份详情，默认上限 50 人）。
+`conditions.json` 会记下当时的 quadstore 与源库路径便于回溯；`with_detail=True` 还会附带
+`details/` 子目录（每人一份详情，默认上限 50 人）。目前**只有 `kg/.bak/app_gradio.py`（已删除界面的备份）
+在调它**，界面侧未接线——需要「可复现的导出留痕」时可直接 import 调用。
 
 > ⚠️ 导出目录**含本机绝对路径**，因此已被 `.gitignore` 排除，不会进仓。
 
@@ -298,18 +334,20 @@ kg/exports/①_完整档案_person30374_20260930/
 
 ```
 kg/
+  README.md              本文件（总览：本体 / ETL / 查询 / 界面 / 验证 / 导出）
   tbox_cbdb.py           TBox v1.0 的 Owlready2 实现（本体定义，冻结）
   TBOX_v1.0.md           本体设计冻结文档 ★改本体先改这里
   etl_seed_ming.py       种子集 ETL（默认明朝，--dy 可换朝代）
   kg_graph.py            quadstore → 内存谓词子图索引（GraphIndex）
-  kg_query.py            Q1–Q9 专题查询实现（不依赖界面，可单独自检）
+  kg_query.py            Q1–Q9 专题查询实现（纯函数，不依赖界面，可单独自检）
   kg_backend.py          三层数据后端：检索 / 详情 / 导出 / 跑 ETL
   topic_dispatcher.py    Q1–Q9 的调度层：TOPIC_SCHEMA（JSON 字段规格）+ run_topic()
   api_server.py          HTTP 接口服务（端口 8799），把上面这些暴露成 /api/kg/*
   kg_stats.py            图谱验收：计数对账 + 抽检
   etl_run.log            ETL 日志（gitignore 内可选保留）
   quadstore/             图谱产物 ★gitignore
-  exports/               导出产物 ★gitignore（含本机绝对路径）
+  exports/               目录式导出产物 ★gitignore（含本机绝对路径，见 §8）
+  .bak/                  已删除的 Gradio 界面备份（不进仓）
 ```
 
 ## 10. 常见问题
