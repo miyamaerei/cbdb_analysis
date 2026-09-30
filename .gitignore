@@ -1,0 +1,47 @@
+# ======================================================================
+# CBDB_SQLite 项目 .gitignore
+# 目标：只提交「源码 / 脚本 / 文档 / 配置」，忽略一切本地生成产物与巨型数据文件
+# ======================================================================
+
+# ---- CBDB 数据库与下载产物（巨型二进制，约 1.8GB，由脚本/下载生成，勿入仓）----
+cbdb_*.sqlite3
+cbdb_*.raw.backup.sqlite3
+cbdb_*.zip
+# 本地生成的元数据快照（可由 latest.json + HF 下载重建）
+cbdb_20260926.json
+
+# ---- 知识图谱 quadstore（Owlready2 生成，单个即数百 MB）----
+kg/quadstore/
+
+# ---- 图谱导出产物（运行输出，且含本地绝对路径）----
+kg/exports/
+
+# ---- 运行 / ETL 日志 ----
+kg/*.log
+
+# ---- 前端依赖与构建产物 ----
+node_modules/
+web/frontend/node_modules/
+web/frontend/dist/
+
+# ---- Python 缓存 / 虚拟环境 ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# ---- 本地重构备份 ----
+kg/.bak/
+
+# ---- 本地分析 / profiling 产物（由脚本从 DB 生成）----
+analysis/
+
+# ---- 本地 Agent / 编辑器 / 系统 ----
+.workbuddy/
+.vscode/
+.claude/
+.DS_Store
+Thumbs.db

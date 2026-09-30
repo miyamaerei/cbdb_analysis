@@ -1,0 +1,21 @@
+{
+  "name": "cbdb-explorer",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CBDB SQLite 查询前端（区间轴年谱 + 关系网络 + SQL 沙盒）",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --port 5173"
+  },
+  "dependencies": {
+    "@esbuild/win32-x64": "^0.28.2",
+    "@rollup/rollup-win32-x64-msvc": "^4.63.5",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7"
+  }
+}

@@ -1,0 +1,51 @@
+cff-version: 1.2.0
+message: "If you use this repository or its CBDB-derived outputs, please cite both
+  this repository and the underlying China Biographical Database (CBDB) as below."
+title: "cbdb_analysis: CBDB SQLite 增强版（分析视图 + 知识图谱 + 查询台）"
+abstract: >-
+  On top of the official cbdb-project/cbdb_sqlite release, this repository adds
+  analytical SQL views (kinship genealogy, county-level people, single-text
+  associations, person life timeline, property-graph edge table), a materialized
+  life-event interval table (LIFE_EVENT_RESOLVED) built from a Simple Temporal
+  Problem with arc-consistency propagation, an Owlready2/RDF-OWL knowledge graph
+  (TBox v1.0 + Ming-dynasty seed quadstore), and two query front-ends (a Gradio
+  desktop console and a Vue 3 web console). No database binaries are stored in
+  the repository; all data must be downloaded from the official CBDB channels.
+type: software
+authors:
+  - alias: miyamaerei
+    website: "https://github.com/miyamaerei"
+repository-code: "https://github.com/miyamaerei/cbdb_analysis"
+url: "https://github.com/miyamaerei/cbdb_analysis"
+license: CC-BY-NC-SA-4.0
+keywords:
+  - CBDB
+  - China Biographical Database
+  - digital humanities
+  - prosopography
+  - SQLite
+  - knowledge graph
+  - RDF
+  - OWL
+  - SPARQL
+  - temporal reasoning
+  - Chinese history
+references:
+  - type: data
+    title: "China Biographical Database (CBDB)"
+    authors:
+      - name: "Harvard University"
+      - name: "Academia Sinica"
+      - name: "Peking University"
+    year: 2018
+    url: "https://projects.iq.harvard.edu/cbdb"
+    notes: >-
+      Licensed under CC BY-NC-SA 4.0. Required citation: Harvard University,
+      Academia Sinica, and Peking University, China Biographical Database (CBDB)
+      (April 24, 2018), https://projects.iq.harvard.edu/cbdb.
+  - type: software
+    title: "cbdb-project/cbdb_sqlite (upstream release of the CBDB SQLite database)"
+    authors:
+      - name: "cbdb-project"
+    url: "https://github.com/cbdb-project/cbdb_sqlite"
+    notes: "Upstream project this repository extends."
