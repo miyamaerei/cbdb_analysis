@@ -38,6 +38,7 @@ if _MISSING:
 import gradio as gr                    # noqa: E402
 
 from app import build_ui               # noqa: E402
+from app.theme import CSS as KG_CSS    # noqa: E402
 
 
 def main():
@@ -51,9 +52,11 @@ def main():
     demo = build_ui()
     demo.queue()
     print(f"CBDB KG 查询台: http://{args.host}:{args.port}")
+    # ⚠️ Gradio 6 的 css 只能给 launch（Blocks 已移除该参数）；
+    # 另在 build_ui() 里用 gr.HTML 注入了一份，两条路互为兜底。
     demo.launch(server_name=args.host, server_port=args.port, share=args.share,
                 inbrowser=not args.no_browser, theme=gr.themes.Soft(),
-                show_error=True)
+                css=KG_CSS, show_error=True)
 
 
 if __name__ == "__main__":

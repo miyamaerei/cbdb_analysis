@@ -208,7 +208,7 @@ python kg/app_gradio.py [--port 7860] [--host 127.0.0.1] [--share] [--no-browser
 
 | Tab | 内容 |
 |---|---|
-| 🔍 查询 | 按姓名（简繁自动扩展）/ 朝代 / 生卒年区间 / 进士 / 官员检索，双击结果行跳详情 |
+| 🔍 查询 | 按姓名（简繁自动扩展）/ 朝代 / 生卒年区间 / 进士 / 官员检索；排序 / 显示列 / 行高在「⚙ 更多条件」里；点结果行跳详情 |
 | 📄 详情 | 人物档案 8 个分区表（TBox 语义，如「曾任官职」节点带年份与任命类型） |
 | 📦 导出 | 把当前查询条件与结果导出成 CSV / JSON |
 | ① ～ ⑨ | 对应 Q1–Q9 的九个专题页（**一份渲染器 + 声明式 `QuerySpec` 驱动**） |
@@ -220,6 +220,58 @@ python kg/app_gradio.py [--port 7860] [--host 127.0.0.1] [--share] [--no-browser
 **CBDB 是繁体库**：搜「王阳明」0 命中，要搜「王守仁」或勾上「别名参与匹配」再搜「陽明」。
 脚本已做 简→繁→原样 三写扩展（`zhconv`，未安装时退化为原样匹配），但**别名回退链**
 （原名 → 别名 → 去姓氏 + 别名）仍需在检索时开启对应开关。
+
+### 6.1 界面布局：三区分离
+
+> 设计依据与 web 端 [`web/FILTER_UX.md`](../web/FILTER_UX.md) 同源。问题是同一个：
+> **条件占满了垂直空间，结果表只剩半屏**。改版前查询页平铺了 4 行控件
+> （朝代+上限 / 姓名+拼音+性别 / 6 个年份 / 4 个复选框）+ 按钮 + 两段提示，
+> 9 个专题页顶部还各有一段两行的 SPARQL 说明，而表格高度是 Gradio 默认的 500px。
+
+```
+┌ 图谱行（一行）──── 知识图谱下拉 · 🔄 刷新 · 规模统计 ──────────────┐
+├ 工具栏（恒一行）── 姓名 · 朝代 · 最多返回 · 🔍 查询 ───────────────┤
+├ 命中提示（一行）── 命中数 · 排序 · 耗时 · **已生效条件摘要** ──────┤
+├ ⚙ 更多条件（默认折叠）拼音 / 性别 / 6 个年份 / 4 个开关 / 排序 / 显示列 / 行高 ┤
+└ 结果表（吃满剩余高度 · 表头吸顶 · ID+姓名固定 · 表内快搜）─────────┘
+```
+
+两条刻意的取舍：
+
+- **条件可以收起来，但「筛了什么」必须一直看得见** —— 折叠区的状态回显在命中提示那行
+  （`K.cond_summary`）：`朝代=明 | 姓名含「王」| 上限=500`。等价于 web 端工具栏那排 chips；
+  否则用户不知道结果为什么是这些。
+- **Gradio 的 Dataframe 点不了表头排序**，所以排序做成折叠区里的「排序 + 方向」两个控件，
+  改动即自动重查（等价于 web 端点表头的即时反馈）。年份列里 `0 = 未知`，
+  SQL 用 `CASE WHEN x > 0 THEN 0 ELSE 1 END` 把未知值压到末尾，否则「按生年升序」第一屏全是未知。
+
+### 6.2 结果表的表头与显示增强
+
+| 能力 | 做法 | 对应 web 端 |
+|---|---|---|
+| 中文表头 | `RESULT_HEADER_ZH`（`personid` → `ID`）；导出 CSV 仍用原始列名 | 主显中文名 |
+| 显示列开关 | `CheckboxGroup` 勾选；`trim_rows()` 只裁输出层，**不重新查库**（`qstate` 存完整 14 列） | 「列 14/91」 |
+| 固定列 | `pinned_columns` 钉住 ID 与姓名，横拉时仍认得出是哪一行 | 🔗 关联键 |
+| 列宽控制 | `column_widths`：ID 6% / 姓名 12% / 性别 5% … 窄列不浪费宽度 | — |
+| 行密度 | 「紧凑行高」开关 → 切换 `kg-df` / `kg-df.kg-cozy` 两个 CSS 档 | `≣ / ≡` |
+| 表内快搜 | `show_search="search"`：已在结果里再过滤，不打库 | 全局搜索框 |
+| 吃满高度 | 表头 `sticky` + `max-height: max(280px, calc(100vh - 350px))` | 结果区 `flex:1` |
+
+**ID 与姓名是锁定列**，永远显示且排在最前：查询页「点一行载入详情」读的是第 0 列
+（`handlers.pick_row`），一旦把 ID 藏了，行点击就会取到别的字段。
+
+### 6.3 样式从哪来
+
+`app/theme.py` 是唯一的样式来源（约 96 行 CSS）。**Gradio 6 已把 `css` / `css_paths` / `head`
+从 `Blocks()` 挪到 `launch()`**，所以走双保险：
+
+- `app_gradio.py` → `launch(css=theme.CSS)`
+- `app/__init__.py:inject_css()` → 一个 `gr.HTML("<style>…</style>")` 组件
+
+这样脚本化启动、回归测试、`gradio_client` 起的服务都带样式。选择器基于 Gradio 6 的实际 DOM
+（结果表是 `.table-wrap > table`，表头行 `.tr-head`；Tab 是 `.tab-header` / `.tab-container`），
+需要覆盖的地方一律 `!important` —— Dataframe 会把 `max_height` 写成行内样式，
+而样式表里的 `!important` 正是唯一能压过行内普通声明的写法。
 
 ---
 
@@ -275,6 +327,7 @@ kg/
   smoke_test.py          端到端冒烟测试（走 HTTP，需服务已启动）
   app_gradio.py          查询台入口（瘦，约 40 行）
   app/                   查询台 UI（分层结构见 app/README.md）
+    theme.py             样式唯一来源（布局/密度 CSS，由 launch(css=) 注入）
   quadstore/             图谱产物 ★gitignore
   exports/               导出产物 ★gitignore（含本机绝对路径）
 ```
@@ -289,4 +342,6 @@ kg/
 | 各朝代图谱都没有这个人 | 详情页会依次去别的图谱探测（`quad_has_person`，毫秒级轻量探测，不开 World） |
 | 搜简体字 0 命中 | CBDB 全库繁体。已做简繁扩展，但姓名还需走别名回退链 |
 | 校验报 `database is locked` | `kg_stats.py` 要在 ETL 完全结束后跑，两者不能同时占用 quadstore |
-| 界面文字/主题改不动 | Gradio 6 的 `theme` 只能放 `launch()`，不能放 `Blocks()`；`show_api` 参数已移除 |
+| 界面文字/主题改不动 | ⚠️ Gradio 6 的 `theme`、`css`、`css_paths`、`head` **只能放 `launch()`，不能放 `Blocks()`**（早期版本相反）；`show_api` 参数已移除。样式改 `app/theme.py`，见 §6.3 |
+| 排序选了「升序」却像降序 | 布尔入参必须过 `handlers._bool()`：进 API 层时枚举型 Radio 会被序列化成字符串，`bool("False")` 是 **True** |
+| 表格高度没跟着视口变 | Dataframe 的 `max_height` 会被 Gradio 写成行内样式，只有样式表里的 `!important` 能压过它，见 §6.3 |

@@ -21,14 +21,15 @@ def _index(quad):
 def build_topic_page(spec: S.QuerySpec, ctx):
     """按一个 QuerySpec 渲染出一整页（Tab）。"""
     with gr.Tab(spec.tab):
-        sparql_note(spec.sparql, spec.hint)
-        with gr.Row():
+        sparql_note(spec.sparql, spec.hint)     # 已折成一行（见 components.sparql_note）
+        with gr.Row(elem_classes=["kg-bar"]):
             blocks = [build_field(f) for f in spec.fields]
             run_btn = gr.Button(spec.btn, variant="primary")
             exp_btn = gr.Button("📦 导出")
-        out_md = gr.Markdown()
+        out_md = gr.Markdown(elem_classes=["kg-md"])
         shown = [s for s in spec.sheets if s.show]
-        tables = [result_table(s.headers, label=s.name) for s in shown]
+        # 专题结果动辄 10 列：固定前两列（ID/姓名 或 A_ID/A），横向滚动时仍认得出是哪一行
+        tables = [result_table(s.headers, label=s.name, pinned=[0, 1]) for s in shown]
         exp_md, exp_files = export_result()
 
     inputs = [ctx.quad] + blocks

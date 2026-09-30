@@ -21,13 +21,14 @@ NAV_SECTIONS = ("kin", "assoc")
 def build(ctx):
     # id="tab_detail"：查询页点结果行后要用 gr.Tabs(selected=...) 自动跳到这里
     with gr.Tab("📄 详情", id="tab_detail"):
-        with gr.Row():
+        with gr.Row(elem_classes=["kg-bar"]):
             # Textbox 而非 Number：Number 的空值会被前端提交成 0（person/0 无意义）
             pid_nb = gr.Textbox(label="人物 c_personid", value="",
                                 placeholder="如 30374（可先在「🔍 查询」点一行）", scale=3)
             load_btn = gr.Button("📄 载入详情", variant="primary", scale=1)
-        basic_md = gr.Markdown("在上方填入 personid，或回到「🔍 查询」点一行结果。")
-        stat_md = gr.Markdown("")
+        basic_md = gr.Markdown("在上方填入 personid，或回到「🔍 查询」点一行结果。",
+                               elem_classes=["kg-md"])
+        stat_md = gr.Markdown("", elem_classes=["kg-md"])
 
         tables = {}
         for key in SECTIONS:

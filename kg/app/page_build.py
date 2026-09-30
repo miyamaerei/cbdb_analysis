@@ -11,15 +11,17 @@ from .shared import quad_info
 def build(ctx):
     with gr.Tab("⚙️ 构建"):
         gr.Markdown("选择朝代 → 运行 `etl_seed_ming.py --dy <朝代>`，"
-                    "产物写入 `kg/quadstore/cbdb_dy<N>.sqlite3` + `.meta.json`。")
-        with gr.Row():
+                    "产物写入 `kg/quadstore/cbdb_dy<N>.sqlite3` + `.meta.json`。",
+                    elem_classes=["kg-md"])
+        with gr.Row(elem_classes=["kg-bar"]):
             bdy_dd = gr.Dropdown(label="朝代", choices=K.dynasty_choices(), value=19, scale=3)
             blimit_nb = gr.Textbox(label="限制人物数（留空/0=全部，调试用）", value="0", scale=1)
-        with gr.Accordion("源库路径（高级）", open=False):
+        with gr.Accordion("源库路径（高级）", open=False, elem_classes=["kg-cond"]):
             db_tb = gr.Textbox(label="CBDB SQLite 路径", value=K.DEFAULT_DB)
             db_btn = gr.Button("应用路径")
         run_btn = gr.Button("▶ 运行 ETL 构建知识图谱", variant="primary")
-        log_tb = gr.Textbox(label="运行日志", lines=18, max_lines=24, autoscroll=True)
+        # 日志给足行数：ETL 输出几十行，窗口太小等于每次都要手动拉
+        log_tb = gr.Textbox(label="运行日志", lines=26, max_lines=40, autoscroll=True)
 
     # ---------------------------------------------------------- 本页事件
     db_btn.click(H.set_db, inputs=[db_tb], outputs=[ctx.db_state])

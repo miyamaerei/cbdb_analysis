@@ -4,6 +4,8 @@
 这里不出现任何 gr.* 组件创建代码，只做「入参 → 出参」，
 方便单独 import 后跑脚本自检（不需要 Gradio 在跑）。
 """
+import time
+
 import gradio as gr
 
 import kg_backend as K
@@ -26,11 +28,43 @@ def _year(x):
         return None
 
 
+def _bool(x):
+    """布尔归一。
+
+    ⚠️ 必须走这里：界面上传的是真 bool，但进 API 层（gradio_client / 脚本化调用）
+    枚举型 Radio 会被序列化成字符串，`bool("False")` 是 **True** —— 直接把
+    「升序」当成了「降序」。凡是 bool 入参都过一遍这个函数。
+    """
+    if isinstance(x, bool):
+        return x
+    return str(x).strip().lower() in ("true", "1", "yes", "y", "on", "降序", "降序 ↓")
+
+
+def _table_update(rows, cols=None, dense=True):
+    """结果表输出：按「显示列」裁剪 + 套「紧凑/舒适」密度类。
+
+    行数据在 qstate 里始终是完整 14 列，这里只做输出层裁剪，
+    所以切换显示列不必重新查库（`apply_view` 用它做即时重绘）。
+    """
+    trimmed, cols2 = K.trim_rows(rows, cols)
+    return gr.update(headers=K.display_headers(cols2), value=trimmed,
+                     column_widths=K.col_widths(cols2),
+                     elem_classes=["kg-df"] + ([] if dense else ["kg-cozy"]))
+
+
+def apply_view(state, cols, dense):
+    """「显示列 / 紧凑行高」变化 → 用上次查询的完整结果即时重绘（不查库）。"""
+    return _table_update((state or {}).get("rows") or [], cols, _bool(dense))
+
+
 def do_query(name, pinyin, gender, bf, bt, df_, dt, ifrom, ito,
-             jinshi, official, malt, nb, lim, dy, quad, db):
+             jinshi, official, malt, nb, lim, dy, quad, db,
+             order_by="personid", desc=False, cols=None, dense=True):
     """条件检索（走源库 SQL）。0 命中时自动降级：开别名 → 去姓氏试字号。"""
     # 年份可能是 ""（Textbox 空）或 0（旧版 Number 提交），统一归一成 int/None
     bf, bt, df_, dt, ifrom, ito = (_year(x) for x in (bf, bt, df_, dt, ifrom, ito))
+    desc = _bool(desc)
+    dense = True if dense is None else _bool(dense)
     note, used = "", name or ""
 
     def _search(nm, ma):
@@ -39,9 +73,10 @@ def do_query(name, pinyin, gender, bf, bt, df_, dt, ifrom, ito,
             birth_from=bf, birth_to=bt, death_from=df_, death_to=dt,
             index_from=ifrom, index_to=ito, jinshi_only=jinshi,
             official_only=official, match_alt=ma, include_neighbors=nb,
-            limit=int(lim or 200))
+            limit=int(lim or 200), order_by=order_by, desc=desc)
 
     try:
+        _t0 = time.time()
         rows, total = _search(name, malt)
         # 回退链：① 开别名 ② 去姓氏试字号（王阳明 → 阳明 → 命中别名「陽明先生」）
         if total == 0 and name:
@@ -55,9 +90,10 @@ def do_query(name, pinyin, gender, bf, bt, df_, dt, ifrom, ito,
                 if total:
                     malt, used, note = ma, nm, f"（原名 0 命中，已自动改用 **{label}** 匹配）"
                     break
+        elapsed = time.time() - _t0
     except Exception as e:
         msg = err_md(e, "查询")
-        return [], msg, {"cond": None, "rows": []}, msg
+        return gr.skip(), msg, {"cond": None, "rows": []}, msg
 
     # 回退命中时把「同姓氏」的排前面（王阳明 → 王守仁 优先于 傅陽明）
     if note and name and len(name) >= 2 and rows:
@@ -69,16 +105,23 @@ def do_query(name, pinyin, gender, bf, bt, df_, dt, ifrom, ito,
             "death_from": df_, "death_to": dt, "index_from": ifrom, "index_to": ito,
             "jinshi_only": bool(jinshi), "official_only": bool(official),
             "match_alt": bool(malt), "include_neighbors": bool(nb),
-            "limit": int(lim or 200), "quad": quad, "db": db}
+            "limit": int(lim or 200), "quad": quad, "db": db,
+            "order_by": order_by, "desc": desc}
+    order_lab = dict(K.ORDER_CHOICES).get(order_by, order_by)
     md = (f"命中 **{total:,}** 条，显示前 **{len(rows):,}** 条　|　"
           f"朝代 **{cond['dynasty_name']}**（c_dy={dy}）　|　"
+          f"排序 {order_lab}{'↓' if desc else '↑'}　|　{elapsed:.2f}s　|　"
           "点结果中的一行可载入「📄 详情」" + note)
+    # 条件摘要回显（等价于 web 端工具栏那排 chips）：
+    # 条件收进折叠区后，页面上必须还看得见「现在到底筛了什么」
+    md += f"\n\n**已生效条件　** {K.cond_summary(cond)}"
     if total == 0:
         md += ("\n\n⚠️ 0 命中排查：① 当前朝代是 **{d}**，此人可能不在该朝（换朝代试试）；"
                "② CBDB 是**繁体**库，简体已自动转换并已试过别名/字号，仍无则库里确实没有；"
                "③ 试只输一个字（如「王」）；④ 勾选「含邻域人物」。"
                ).format(d=cond["dynasty_name"])
-    return rows, md, {"cond": cond, "rows": rows}, K.cond_summary(cond)
+    return _table_update(rows, cols, dense), md, {"cond": cond, "rows": rows}, \
+        K.cond_summary(cond)
 
 
 def pick_row(evt: gr.SelectData, table):

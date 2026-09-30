@@ -34,6 +34,49 @@ EXPORT_DIR = os.path.join(HERE, "exports")
 RESULT_HEADERS = ["personid", "姓名", "拼音", "性别", "生年", "卒年", "指数年",
                   "朝代", "进士", "官员", "亲属", "交遊", "任职", "入仕"]
 
+# ---------------- 结果显示名 / 显示列 ----------------
+# 屏幕表头用的中文名（导出 CSV 仍用 RESULT_HEADERS 的原始列名，保持机器可读）
+RESULT_HEADER_ZH = {"personid": "ID", "拼音": "拼音", "指数年": "指数年"}
+
+# 强制显示、且永远排在最前的列：不能取消勾选。
+# 原因：查询页「点一行载入详情」是读第 0 列当 personid（handlers.pick_row），
+# 一旦把 ID 藏了，行点击就会取到别的字段。
+RESULT_LOCKED_COLS = ["personid", "姓名"]
+
+# 勾选式「显示列」可选的列（= 全部列 - 固定列），默认值再去掉拼音（宽且少用）
+RESULT_TOGGLE_COLS = [c for c in RESULT_HEADERS if c not in RESULT_LOCKED_COLS]
+RESULT_DEFAULT_COLS = [c for c in RESULT_TOGGLE_COLS if c != "拼音"]
+
+# 列宽（百分比）。窄列不浪费宽度，姓名/拼音给足，横拉更少。
+RESULT_COL_WIDTHS = {
+    "personid": "6%", "姓名": "12%", "拼音": "13%", "性别": "5%", "生年": "6%",
+    "卒年": "6%", "指数年": "7%", "朝代": "6%", "进士": "5%", "官员": "5%",
+    "亲属": "5%", "交遊": "5%", "任职": "5%", "入仕": "5%",
+}
+
+# 排序列白名单：标签 → SQL 表达式（限 BIOG_MAIN 及其计数子查询）
+_ORDER_SQL = {
+    "personid": "b.c_personid",
+    "birth": "b.c_birthyear",
+    "death": "b.c_deathyear",
+    "index": "b.c_index_year",
+    "name": "b.c_name_chn",
+    "kin": "(SELECT COUNT(*) FROM KIN_DATA k "
+           "WHERE k.c_personid=b.c_personid AND k.c_kin_id>0)",
+    "assoc": "(SELECT COUNT(*) FROM ASSOC_DATA a "
+             "WHERE a.c_personid=b.c_personid AND a.c_assoc_id>0)",
+    "tenure": "(SELECT COUNT(*) FROM POSTED_TO_OFFICE_DATA o "
+              "WHERE o.c_personid=b.c_personid AND o.c_office_id>0)",
+}
+# 查询页「排序」下拉用：标签 → key
+ORDER_CHOICES = [
+    ("ID（默认）", "personid"), ("生年", "birth"), ("卒年", "death"),
+    ("指数年", "index"), ("姓名", "name"), ("亲属数", "kin"),
+    ("交遊数", "assoc"), ("任职数", "tenure"),
+]
+# 年份列里 0 = 未知，排序时统一压到最后（否则升序一屏全是「未知」）
+_ZERO_LAST = ("birth", "death", "index")
+
 # 详情各段表头
 SECTION_HEADERS = {
     "kin":    ["方向", "亲属关系", "对方", "对方ID", "世代", "史料"],
@@ -183,10 +226,53 @@ def name_variants(s):
     return out
 
 
+def order_clause(key, desc=False):
+    """排序列 key → SQL ORDER BY 子句（白名单，防注入）。
+
+    Gradio 的 Dataframe 不支持点表头排序，所以排序做成一个下拉；
+    年份列的 0 表示未知，统一 `CASE WHEN x>0 THEN 0 ELSE 1 END` 压到末尾，
+    否则「按生年升序」的第一屏全是未知值。
+    """
+    key = key if key in _ORDER_SQL else "personid"
+    expr = _ORDER_SQL[key]
+    d = "DESC" if desc else "ASC"
+    if key in _ZERO_LAST:
+        return f"ORDER BY CASE WHEN {expr} > 0 THEN 0 ELSE 1 END, {expr} {d}"
+    return f"ORDER BY {expr} {d}"
+
+
+def display_headers(cols=None):
+    """列名列表 → 屏幕表头（中文显示名）。"""
+    return [RESULT_HEADER_ZH.get(c, c) for c in (cols or RESULT_HEADERS)]
+
+
+def result_cols(checked=None):
+    """勾选的列 → 完整列顺序（固定列恒在最前）。"""
+    checked = [c for c in (checked or []) if c in RESULT_TOGGLE_COLS]
+    return RESULT_LOCKED_COLS + checked
+
+
+def trim_rows(rows, cols=None):
+    """按列裁剪二维行数据，返回 (rows, cols)。
+
+    「显示列」只影响输出层——`qstate` 里始终保存完整 14 列，
+    这样切换列不必重查，导出也不受屏幕显示影响。
+    """
+    cols = result_cols(cols) if cols is not None else list(RESULT_HEADERS)
+    idx = [RESULT_HEADERS.index(c) for c in cols]
+    return [[r[i] if i < len(r) else "" for i in idx] for r in (rows or [])], cols
+
+
+def col_widths(cols):
+    """与列数等长的宽度列表（Gradio 要求长度一致）。"""
+    return [RESULT_COL_WIDTHS.get(c, "8%") for c in cols]
+
+
 def search_persons(db=None, dy=19, name="", pinyin="", gender="全部",
                    birth_from=None, birth_to=None, death_from=None, death_to=None,
                    index_from=None, index_to=None, jinshi_only=False, official_only=False,
-                   match_alt=False, include_neighbors=False, limit=200):
+                   match_alt=False, include_neighbors=False, limit=200,
+                   order_by="personid", desc=False):
     """返回 (rows, total)：rows 为 RESULT_HEADERS 顺序的二维列表。"""
     db = db or DEFAULT_DB
     con = src_conn(db)
@@ -256,7 +342,7 @@ def search_persons(db=None, dy=19, name="", pinyin="", gender="全部",
     rows = con.execute(
         f"""SELECT b.c_personid, b.c_name_chn, b.c_name, b.c_female, b.c_birthyear,
                    b.c_deathyear, b.c_index_year, b.c_dy
-            FROM BIOG_MAIN b WHERE {wsql} ORDER BY b.c_personid LIMIT ?""",
+            FROM BIOG_MAIN b WHERE {wsql} {order_clause(order_by, desc)} LIMIT ?""",
         args + [int(limit)]).fetchall()
 
     pids = [r[0] for r in rows]

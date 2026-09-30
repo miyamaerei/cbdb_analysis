@@ -26,19 +26,32 @@ for _p in (KG_DIR, HERE):
         sys.path.insert(0, _p)
 
 import kg_backend as K                                    # noqa: E402
+from . import theme                                       # noqa: E402
 from .shared import AppCtx, quad_info                     # noqa: E402
 from . import handlers as H                               # noqa: E402
 from . import page_search, page_detail, page_export       # noqa: E402
 from . import page_topics, page_build                     # noqa: E402
 
 TITLE_MD = """# CBDB 知识图谱 · 查询台
-数据源：源库 `cbdb_20260926.sqlite3`（检索） + Owlready2 quadstore（详情，TBox v1.0）。
-五个页面：**🔍 查询** / **📄 详情** / **📦 导出** / **①~⑨ 专题查询** / **⚙️ 构建**。"""
+源库 `cbdb_20260926.sqlite3`（检索）+ Owlready2 quadstore（详情，TBox v1.0）· 五页：**🔍 查询** / **📄 详情** / **📦 导出** / **①~⑨ 专题** / **⚙️ 构建**"""
+
+
+def inject_css():
+    """把主题 CSS 塞进 DOM。
+
+    ⚠️ Gradio 6 把 `css` / `css_paths` / `head` 从 `Blocks()` 挪到了 `launch()`——
+    样式只能在启动那一刻给。为了「不管谁怎么起服务都带样式」（脚本、回归测试、
+    gradio_client），这里额外用一个空 HTML 组件把 `<style>` 放进 DOM。
+    与 `app_gradio.py` 的 `launch(css=...)` 是双保险，重复注入无害。
+    """
+    gr.HTML(f"<style>{theme.CSS}</style>", container=False, padding=False,
+            min_height=0, elem_classes=["kg-noop"])
 
 
 def build_ui():
     with gr.Blocks(title="CBDB 知识图谱查询台") as demo:
-        gr.Markdown(TITLE_MD)
+        inject_css()
+        gr.Markdown(TITLE_MD, elem_classes=["kg-title"])
 
         ctx = AppCtx()
         ctx.db_state = gr.State(K.DEFAULT_DB)
@@ -70,7 +83,10 @@ def _bind_cross_page(ctx):
                           api_name="search_query")
     for b in search["submitters"]:
         b.submit(H.do_query, inputs=search["inputs"], outputs=outputs)
+    # ② 排序 / 上限 一变就重查（Gradio 的表格点不了表头，排序靠这里给即时反馈）
+    for b in search.get("reactive", ()):
+        b.change(H.do_query, inputs=search["inputs"], outputs=outputs)
 
-    # ② 结果表点一行 → 详情页载入
+    # ③ 结果表点一行 → 详情页载入
     H.bind_cross_page(ctx, search, ctx.pages["detail"])
     return ctx
