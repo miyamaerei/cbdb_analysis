@@ -23,6 +23,7 @@ GET  /api/presets                    报告里的预设查询清单
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sqlite3
@@ -30,6 +31,11 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
+
+# 知识图谱 API（kg/api_server.py，独立进程 8799）的反向代理目标。
+# 生产由本服务同源托管 /api/kg/*，前端无需跨域。
+KG_TARGET_HOST = "127.0.0.1"
+KG_TARGET_PORT = 8799
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(ROOT, "frontend", "dist")
@@ -573,10 +579,68 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._send(204, b"", "text/plain")
 
+    # ----------------------------------------------------------------------
+    # 知识图谱反向代理：把 /api/kg/* 转发到 kg/api_server.py（127.0.0.1:8799）
+    # ----------------------------------------------------------------------
+    def _proxy_kg(self):
+        target = (KG_TARGET_HOST, KG_TARGET_PORT)
+        try:
+            # 超时设大（600s）：构建（ETL）是长任务，SSE 流式输出可能阶段性静默
+            conn = http.client.HTTPConnection(target[0], target[1], timeout=600)
+            headers = {}
+            ct = self.headers.get("Content-Type")
+            cl = self.headers.get("Content-Length")
+            if ct:
+                headers["Content-Type"] = ct
+            if cl:
+                headers["Content-Length"] = cl
+            body = self.rfile.read(int(cl)) if cl else None
+            conn.request(self.command, self.path, body=body, headers=headers)
+            resp = conn.getresponse()
+            ctype = resp.getheader("Content-Type", "application/json; charset=utf-8")
+            is_stream = (ctype or "").startswith("text/event-stream")
+            self.send_response(resp.status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Cache-Control", "no-store")
+            # ⚠️ 透传下载文件名：上游 export 在 Content-Disposition 里放 ASCII 文件名，
+            # 不转发的话前端拿不到文件名（默认 blob 名，用户下载后是乱名）。
+            cd = resp.getheader("Content-Disposition")
+            if cd:
+                self.send_header("Content-Disposition", cd)
+            if is_stream:
+                # 流式：用分块传输（HTTP/1.1 chunked）逐块转发 SSE，浏览器才能实时收到
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    self.wfile.write(("%X\r\n" % len(chunk)).encode("ascii"))
+                    self.wfile.write(chunk)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            else:
+                data = resp.read()
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            conn.close()
+        except Exception as e:  # noqa: BLE001
+            self._send(502, {"error": f"知识图谱服务不可达（{KG_TARGET_HOST}:{KG_TARGET_PORT}）：{type(e).__name__}: {e}"})
+
     def do_GET(self):
         u = urlparse(self.path)
         qs = parse_qs(u.query)
         seg = [unquote(s) for s in u.path.split("/") if s]
+
+        # 知识图谱 API 走反向代理（独立进程 8799）
+        if len(seg) > 1 and seg[0] == "api" and seg[1] == "kg":
+            return self._proxy_kg()
 
         if not seg or seg[0] != "api":
             return self._static(u.path)
@@ -631,6 +695,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         seg = [unquote(s) for s in u.path.split("/") if s]
+        if len(seg) > 1 and seg[0] == "api" and seg[1] == "kg":
+            return self._proxy_kg()
         if len(seg) < 2 or seg[0] != "api":
             return self._send(404, {"error": "未知接口"})
         n = int(self.headers.get("Content-Length") or 0)

@@ -3,7 +3,7 @@
 
 与底座分离的原因：
   * `kg_graph.py` 只负责 quadstore → 内存谓词子图的索引（GraphIndex）；
-  * 本文件只负责**查询逻辑**，不碰 sqlite、不碰 Gradio，改查询/加查询只看这一个文件。
+  * 本文件只负责**查询逻辑**，不碰 sqlite、不碰界面框架，改查询/加查询只看这一个文件。
 
 统一调用契约（UI 层与脚本共用）：
     qN_xxx(g: GraphIndex, ...参数) -> 见各函数 docstring
@@ -11,9 +11,26 @@
   * 双表（图）： (headers_nodes, nodes, headers_edges, edges, md)
   * Q1 档案：   (md, flat_rows)   flat_rows 用于导出
 
-不依赖 gradio；可 `python -c "import kg_query"` 单独自检。
+不依赖界面框架；可 `python -c "import kg_query"` 单独自检。
 """
 from collections import defaultdict
+
+
+def _parse_bool(x):
+    """quadstore 把 isFemale 存成文本 'true'/'false'（非布尔），
+    bool('false') 在 Python 里恒为 True，必须显式解析。"""
+    if x is None or x == "":
+        return None
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, (int, float)):
+        return bool(x)
+    s = str(x).strip().lower()
+    if s in ("true", "1", "yes", "t"):
+        return True
+    if s in ("false", "0", "no", "f"):
+        return False
+    return None
 
 
 # ============================================================ Q1 完整档案
@@ -22,7 +39,7 @@ def q1_dossier(g, pid):
     if s is None:
         return "⚠️ 图谱中没有 `person/%s`。" % pid, []
     b = lambda k: g.d(k, s)
-    sex = {True: "女", False: "男"}.get(b("isFemale"), "未詳")
+    sex = {True: "女", False: "男"}.get(_parse_bool(b("isFemale")), "未詳")
     dys = g.o("dynastyOf", s)
     lines = [
         f"### {b('nameChn') or '（无名）'}　`person/{pid}`　（{b('namePinyin') or ''}）",

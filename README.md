@@ -1,7 +1,7 @@
 # CBDB SQLite · 增强版（分析视图 + 知识图谱 + 查询台）
 
 > 本仓库在官方 [`cbdb-project/cbdb_sqlite`](https://github.com/cbdb-project/cbdb_sqlite) 基础上扩展，
-> 新增了**分析视图**、**Owlready2 知识图谱**与**两套查询界面**（Gradio 桌面台 / Vue 网页台）。
+> 新增了**分析视图**、**Owlready2 知识图谱**与**一套 Vue 网页查询台**（视图检索 / 人物年谱 / 知识图谱三模式）。
 > 底层的 CBDB 数据文件由公开渠道下载，仓库本身**不存放任何数据库二进制**。
 
 ---
@@ -30,7 +30,8 @@
 | **物化结果表（1 个）** | `LIFE_EVENT_RESOLVED`（生平区间轴，300 万行级） | `scripts/life_order.py` |
 | **辅助索引（12 个）** | 为上述视图的过滤列建索引（否则县城视图等会退化成全表扫描） | `scripts/create_custom_views.sh` |
 | **知识图谱（Owlready2）** | TBox v1.0 本体 + 明朝种子集 quadstore（RDF/OWL 语义层） | `kg/tbox_cbdb.py` + `kg/etl_seed_ming.py` |
-| **查询界面（2 套）** | Gradio 查询台（13 个 Tab）+ Vue 网页查询台 | `kg/app/` + `web/` |
+| **查询界面** | Vue 网页查询台（视图检索 / 人物年谱 / 知识图谱三模式） | `web/` + `kg/api_server.py` |
+| **知识图谱接口** | 检索 / 详情 / 专题 Q1–Q9 / 导出 / 构建（ETL）的 REST 接口 | `kg/api_server.py`（端口 8799，经 `web/server.py` 同源反代） |
 
 > 上游 `cbdb-project/cbdb_sqlite` 自带的**外键约束、18 个便利视图、`ADDRESSES` 反规范化表**
 > 本仓库一并沿用（见 §2.1），并新增上表的分析视图与知识图谱。
@@ -88,7 +89,7 @@ python scripts/life_order.py --db cbdb_20260926.sqlite3 --person 30374  # 单人
 ## 3. 新增的知识图谱（Owlready2 + RDF/OWL）
 
 > 本节是概览；**完整的知识图谱文档（本体、ETL 铁律、查询底座、Q1–Q9、验证、导出）见
-> [`kg/README.md`](./kg/README.md)**，界面代码结构见 [`kg/app/README.md`](./kg/app/README.md)。
+> [`kg/README.md`](./kg/README.md)。
 
 ### 3.1 本体设计（TBox v1.0，已冻结）
 
@@ -146,32 +147,38 @@ python kg/etl_seed_ming.py --db cbdb_20260926.sqlite3 --dy 19
 
 ---
 
-## 4. Python 查询页面的设计（`kg/app/`）
+## 4. 知识图谱的分层设计（`kg/`）
 
-Gradio 查询台采用**单向依赖、无循环导入**的分层架构：
+原来的 Gradio 界面（13 个 Tab）已**整体迁到 Vue**：`kg/` 现在只保留
+**逻辑层 + HTTP 接口**，不含任何界面框架，界面全部在 `web/`。
 
 ```
-kg_backend / kg_graph / kg_query      数据层与查询层（无 Gradio）
+tbox_cbdb.py / etl_seed_ming.py      本体（TBox v1.0）+ 种子集 ETL
         ↑
-app.shared / app.components           共享上下文（AppCtx）与组件工厂
+kg_graph.py                          quadstore → 内存谓词子图索引（GraphIndex）
+kg_query.py                          Q1–Q9 专题查询（纯函数，不碰 sqlite/界面）
+kg_backend.py                        检索 / 详情 / 导出 / 跑 ETL
+topic_dispatcher.py                  TOPIC_SCHEMA（JSON 字段规格）+ run_topic()
         ↑
-app.handlers / app.specs              回调逻辑与「页面规格」（无布局代码）
+api_server.py                        HTTP 接口服务（端口 8799，标准库实现）
         ↑
-app.page_*                            每个文件一个 Tab：摆控件 + 绑本页事件
+web/server.py  _proxy_kg()           同源反代 /api/kg/*（前端无需跨域）
         ↑
-app.build_ui()                        建 State → 按 Tab 顺序建页 → 连跨页事件
+web/frontend  KgExplorer.vue         检索 / 详情 / 专题 / 导出 / 构建 五个 Tab
 ```
 
 设计要点：
 
-- **页面之间不互相 import**，需要共享的东西一律走 `AppCtx`（图谱 / 朝代 / 选中人物 / 详情输出 / 查询状态）。
-- **9 个专题页用一份渲染器 + 声明式 `QuerySpec` 驱动**：在 `app/specs.py` 声明
-  `QuerySpec(tab, fields, sheets, run, key)`，由 `app/page_topics.py` 遍历生成；
-  新增查询 = 在 `kg_query.py` 加函数 + 在 `specs.py` 加一条，页面自动生成。
-- **跨页事件集中管理**：结果表点一行 → 自动切到详情页；查询条件同步到导出页。
-- 入口 `kg/app_gradio.py` 仅做「解析参数 → `build_ui()` → `launch()`」，约 42 行。
+- **逻辑层零界面依赖**：`kg_backend` / `kg_graph` / `kg_query` / `topic_dispatcher`
+  都不 import 界面框架，可单独 `python -c "import kg_query"` 自检。
+- **9 个专题由声明式 schema 驱动**：在 `topic_dispatcher.TOPIC_SCHEMA` 声明
+  （key / tab / hint / btn / fields），前端表单自动渲染；
+  新增查询 = 在 `kg_query.py` 加函数 + 在 schema 加一条 + `run_topic()` 接上，**不用改 Vue**。
+- **详情页不再开 owlready2 World**（它会长期占 quadstore 写锁，与专题的只读索引冲突），
+  改走 GraphIndex 只读连接（`person_detail_graph`），从根上消掉 `database is locked`。
+- 知识图谱检索默认走**源库 SQL**（索引齐全、1.7 秒内），图谱只服务多跳与详情。
 
-五个 Tab：**🔍 查询 / 📄 详情 / 📦 导出 / ①~⑨ 专题查询 / ⚙️ 构建**。
+五个 Tab：**检索 / 详情 / 专题（Q1–Q9，Q3·Q9 带力导向图）/ 导出 / 构建（SSE 流式）**。
 
 ---
 
@@ -182,14 +189,14 @@ app.build_ui()                        建 State → 按 Tab 顺序建页 → 连
 - **Python** ≥ 3.10
   ```bash
   pip install -r requirements.txt
-  # gradio + owlready2 + zhconv；端到端自测另需：pip install gradio_client
+  # owlready2（本体/ETL）+ zhconv（简繁转换）。Gradio 已随界面迁移移除。
   ```
   > ⚠️ **运行脚本的 python 必须和装依赖的是同一个解释器**，否则会报
-  > `ModuleNotFoundError: No module named 'gradio'`（包装了，但没装在那个解释器里）。
-  > 用虚拟环境时显式指定：`<venv>/Scripts/python.exe kg/app_gradio.py --port 7860`（Windows）/
-  > `<venv>/bin/python kg/app_gradio.py --port 7860`。查当前解释器：
+  > `ModuleNotFoundError: No module named 'owlready2'`（包装了，但没装在那个解释器里）。
+  > 用虚拟环境时显式指定：`<venv>/Scripts/python.exe kg/api_server.py --port 8799`（Windows）/
+  > `<venv>/bin/python kg/api_server.py --port 8799`。查当前解释器：
   > `python -c "import sys; print(sys.executable)"`。
-- **前端**（仅 Web 查询台需要，Gradio 台不需要）：Node.js + npm
+- **前端**（Web 查询台需要）：Node.js + npm
   ```bash
   cd web/frontend && npm install && npm run build   # 产出 dist/，交给 server.py 托管
   ```

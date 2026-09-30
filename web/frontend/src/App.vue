@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from './api'
 import DataTable from './components/DataTable.vue'
 import IntervalTimeline from './components/IntervalTimeline.vue'
+import KgExplorer from './components/KgExplorer.vue'
+import PersonSearch from './components/PersonSearch.vue'
 import RelationNetwork from './components/RelationNetwork.vue'
 import ViewExplorer from './components/ViewExplorer.vue'
 import ViewNav from './components/ViewNav.vue'
@@ -13,10 +15,12 @@ const err = ref('')
 
 // ---------------------------------------------------------------- 主模式
 // person = 人物年谱（单人纵向） / view = 视图检索（24 个视图，横向分组）
+// kg = 知识图谱（原 Gradio 前端迁移到 Vue，复用 DataTable）
 const mode = ref('person')
 const MODES = [
   { k: 'person', name: '人物年谱' },
   { k: 'view', name: '视图检索' },
+  { k: 'kg', name: '知识图谱' },
 ]
 
 // ---------------------------------------------------------------- 视图元数据
@@ -104,24 +108,6 @@ function onOpenView(name, state) {
 function onOpenTimeline(id) {
   mode.value = 'person'
   selectPerson(id)
-}
-
-// ---------------------------------------------------------------- 搜索
-const q = ref('王安石')
-const results = ref([])
-const searching = ref(false)
-
-async function doSearch() {
-  if (!q.value.trim()) return
-  searching.value = true
-  err.value = ''
-  try {
-    results.value = await api.search(q.value.trim(), 40)
-  } catch (e) {
-    err.value = String(e)
-  } finally {
-    searching.value = false
-  }
 }
 
 // ---------------------------------------------------------------- 当前人物
@@ -258,8 +244,6 @@ onMounted(async () => {
   } catch (e) {
     err.value = `无法连接后端：${e}。请先在 web/ 下运行 python server.py`
   }
-  await doSearch()
-  if (results.value.length) await selectPerson(results.value[0].c_personid)
 })
 
 const filtered = computed(() => {
@@ -358,50 +342,26 @@ const lifeSpan = computed(() => {
       </section>
     </div>
 
+    <!-- ============ 知识图谱模式（原 Gradio 前端迁移到 Vue） ============ -->
+    <div class="main" v-else-if="mode === 'kg'">
+      <KgExplorer />
+    </div>
+
     <!-- ============ 人物年谱模式 ============ -->
     <div class="main" v-else>
-      <!-- 左侧 -->
-      <aside class="side panel">
-        <div class="search">
-          <input
-            v-model="q"
-            placeholder="输入姓名，如 王安石 / 蘇軾 / 朱熹"
-            @keyup.enter="doSearch"
-          />
-          <button class="primary" @click="doSearch" :disabled="searching">
-            {{ searching ? '搜索中' : '搜索' }}
-          </button>
-        </div>
-
-        <div class="list">
-          <div
-            v-for="r in results"
-            :key="r.c_personid"
-            class="item"
-            :class="{ active: r.c_personid === pid }"
-            @click="selectPerson(r.c_personid)"
-          >
-            <div class="nm">{{ r.c_name_chn || r.c_name }}</div>
-            <div class="meta muted">
-              {{ r.dynasty || '—' }}
-              <span v-if="r.c_birthyear > 0"> · {{ r.c_birthyear }}–{{ r.c_deathyear > 0 ? r.c_deathyear : '?' }}</span>
-              <span v-else-if="r.c_index_year"> · 指数年 {{ r.c_index_year }}</span>
-              <span> · {{ r.events }} 事件</span>
-            </div>
-          </div>
-          <div v-if="!results.length && !searching" class="empty muted">没有匹配结果</div>
-        </div>
-
-        <div class="hint muted">
-          点击人名载入年谱。数据来自 <code>LIFE_EVENT_RESOLVED</code>：
-          每条事件是一个 <b>区间 [lo, hi]</b>，而不是一个假年份。
-        </div>
-      </aside>
-
-      <!-- 右侧 -->
+      <!-- 右侧（占满宽度，搜索框移到顶部一行） -->
       <section class="content">
+        <!-- 顶部人物定位搜索框（与视图检索同款） -->
+        <div class="panel psearch-bar">
+          <PersonSearch @select="selectPerson" />
+          <span class="muted ps-tip">
+            点击人名载入年谱。数据来自 <code>LIFE_EVENT_RESOLVED</code>：每条事件是一个 <b>区间 [lo, hi]</b>。
+          </span>
+        </div>
+
+
         <div v-if="!person" class="panel empty-panel muted">
-          从左侧选择一位人物
+          在上方搜索并选择一位人物
         </div>
 
         <template v-else>
@@ -628,16 +588,11 @@ const lifeSpan = computed(() => {
 .modes button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 .side { width: 300px; flex: 0 0 300px; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-.search { display: flex; gap: 6px; }
-.search button { flex: 0 0 auto; }
-.list { flex: 1 1 auto; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 8px; }
-.item { padding: 6px 8px; border-radius: 6px; cursor: pointer; }
-.item:hover { background: #f4f7ff; }
-.item.active { background: var(--accent-soft); border: 1px solid #c7dbff; }
-.item .nm { font-weight: 600; }
-.item .meta { font-size: 12px; }
-.hint { font-size: 11px; line-height: 1.5; border-top: 1px solid var(--border); padding-top: 8px; }
 .empty-panel { padding: 60px; text-align: center; }
+
+/* 人物定位搜索条：占满顶部一行，下方年谱占满剩余宽度 */
+.psearch-bar { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; flex-wrap: wrap; }
+.psearch-bar .ps-tip { font-size: 12px; line-height: 1.4; }
 
 .content { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
 /* 视图检索模式：内部自带滚动（结果表占满高度），外层不要再滚 */

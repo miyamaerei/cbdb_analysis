@@ -11,7 +11,7 @@ R8 年份一律 int
     python etl_seed_ming.py [--db PATH] [--out PATH] [--dy N] [--limit-persons N]
 
 --dy 朝代码（DYNASTIES.c_dy）：19=明(默认) 15=宋 6=唐 20=清 ...
---out 默认 quadstore/cbdb_dy{N}.sqlite3；结束后另写同名 .meta.json（Gradio 应用据此列出已构建图谱）
+--out 默认 quadstore/cbdb_dy{N}.sqlite3；结束后另写同名 .meta.json（接口服务据此列出已构建图谱）
 """
 import argparse, json, os, sqlite3, sys, time
 
@@ -716,10 +716,10 @@ def main():
     ]:
         LOG(f"    {name}: {cnt:,}")
     LOG(f"总耗时 {time.time()-t0:.0f}s")
-    # 释放 quadstore 连接（之后 kg_stats.py / Gradio 才能独占读取）
+    # 释放 quadstore 连接（之后 kg_stats.py / 接口服务才能独占读取）
     world.close()
 
-    # 元数据 sidecar：Gradio 应用据此列出「已构建的知识图谱」
+    # 元数据 sidecar：接口服务据此列出「已构建的知识图谱」
     try:
         dname = None
         for (chn, en_,) in src.execute(

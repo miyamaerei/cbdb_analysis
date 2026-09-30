@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""CBDB 知识图谱 Gradio 应用后端。
+"""CBDB 知识图谱后端（供 kg/api_server.py 暴露 HTTP 接口，界面在 web/ 的 Vue）。
 
 三层数据：
   ① 源库 SQLite（cbdb_20260926.sqlite3）→ 朝代清单、人物检索（快，有索引）
@@ -123,7 +123,7 @@ def dynasties(db=None):
 
 
 def dynasty_choices(db=None):
-    """Gradio Dropdown 用 [(label, dy)]，只含有人物的朝代。"""
+    """下拉选项 [(label, dy)]，只含有人物的朝代。"""
     ds = [d for d in dynasties(db) if d["persons"] > 0]
     ds.sort(key=lambda d: -d["persons"])
     return [(f"{d['dy']} · {d['chn']}（{d['en']}，{d['start']}~{d['end']}）· {d['persons']:,} 人", d["dy"])
@@ -229,7 +229,7 @@ def name_variants(s):
 def order_clause(key, desc=False):
     """排序列 key → SQL ORDER BY 子句（白名单，防注入）。
 
-    Gradio 的 Dataframe 不支持点表头排序，所以排序做成一个下拉；
+    排序做成一个下拉（早期 Gradio Dataframe 不能点表头，现由前端点表头排序）；
     年份列的 0 表示未知，统一 `CASE WHEN x>0 THEN 0 ELSE 1 END` 压到末尾，
     否则「按生年升序」的第一屏全是未知值。
     """
@@ -264,7 +264,7 @@ def trim_rows(rows, cols=None):
 
 
 def col_widths(cols):
-    """与列数等长的宽度列表（Gradio 要求长度一致）。"""
+    """与列数等长的宽度列表。"""
     return [RESULT_COL_WIDTHS.get(c, "8%") for c in cols]
 
 
@@ -312,7 +312,7 @@ def search_persons(db=None, dy=19, name="", pinyin="", gender="全部",
         where.append("b.c_female=1")
 
     def rng(col, lo, hi):
-        # ⚠️ CBDB 里 0 == 未知，且 Gradio 的 Number 组件空值会提交成 0，
+        # ⚠️ CBDB 里 0 == 未知，且表单数字框空值会提交成 0，
         # 必须把 0 当成「未填」，否则会生成 `col>=0 AND col<=0` 导致 0 命中。
         lo = int(lo) if lo else None
         hi = int(hi) if hi else None
@@ -382,6 +382,55 @@ def search_persons(db=None, dy=19, name="", pinyin="", gender="全部",
             c_kin.get(pid, 0), c_asc.get(pid, 0), c_ten.get(pid, 0), c_ent.get(pid, 0),
         ])
     return out, total
+
+
+def search_persons_fallback(db=None, dy=19, name="", pinyin="", gender="全部",
+                            birth_from=None, birth_to=None, death_from=None, death_to=None,
+                            index_from=None, index_to=None, jinshi_only=False, official_only=False,
+                            match_alt=False, include_neighbors=False, limit=200,
+                            order_by="personid", desc=False):
+    """条件检索 + 自动回退链（原名 0 命中 → 开别名 → 去姓氏试字号）。
+
+    CBDB 是繁体库，且常用检索名与库内主名/别名不一致（如「王阳明」→ 主名
+    「王守仁」、别名「陽明先生」）。原名 0 命中时依次尝试：
+        ① 开别名匹配
+        ② 去姓氏试字号（「王阳明」→「阳明」，命中别名「陽明先生」）
+    命中「去姓氏」版本时，把**同姓氏**的结果排在最前（「王守仁」优先于「傅陽明」）。
+
+    返回 (rows, total, note, used_name)：
+        rows        —— RESULT_HEADERS 顺序的二维列表
+        total       —— 命中总数
+        note        —— 人类可读的回退说明（空串表示原名即命中）
+        used_name   —— 实际生效的检索名（前端回显用）
+    """
+    def _search(nm, ma):
+        return search_persons(
+            db=db, dy=dy, name=nm, pinyin=pinyin, gender=gender,
+            birth_from=birth_from, birth_to=birth_to,
+            death_from=death_from, death_to=death_to,
+            index_from=index_from, index_to=index_to,
+            jinshi_only=jinshi_only, official_only=official_only,
+            match_alt=ma, include_neighbors=include_neighbors,
+            limit=int(limit or 200), order_by=order_by, desc=desc)
+
+    rows, total = _search(name, match_alt)
+    note, used = "", name or ""
+    if total == 0 and name:
+        chain = [(name, True, "别名")]
+        if len(name) >= 3:
+            for cut in (name[1:], name[-2:]):
+                if cut != name:
+                    chain.append((cut, True, "去姓氏「%s」+ 别名" % cut))
+        for nm, ma, label in chain:
+            rows, total = _search(nm, ma)
+            if total:
+                match_alt, used, note = ma, nm, "（原名 0 命中，已自动改用 %s 匹配）" % label
+                break
+    # 回退命中时把「同姓氏」的排前面
+    if note and name and len(name) >= 2 and rows:
+        first = name[0]
+        rows = sorted(rows, key=lambda r: (0 if first in (r[1] or "") else 1, r[0]))
+    return rows, total, note, used
 
 
 # ============================================================ quadstore
@@ -677,6 +726,218 @@ def format_basic(d):
     return "\n".join(lines)
 
 
+# ============================================================ 详情（源库通用版）
+def person_basic_sql(db, pid):
+    """从源库 BIOG_MAIN 取基本信息（不依赖 quadstore，所有朝代通用）。
+    返回与 person_detail 的 basic 同构的 dict；找不到返回 None。"""
+    db = db or DEFAULT_DB
+    con = src_conn(db)
+    try:
+        row = con.execute(
+            "SELECT c_personid, c_name_chn, c_name, c_female, c_birthyear, "
+            "c_deathyear, c_index_year, c_dy FROM BIOG_MAIN WHERE c_personid=?",
+            (int(pid),)).fetchone()
+        if not row:
+            return None
+        pid_, chn, py, fem, by, dy, iy, cdy = row
+        dn = con.execute("SELECT c_dynasty_chn FROM DYNASTIES WHERE c_dy=?",
+                         (cdy,)).fetchone()
+        alts = [r[0] for r in con.execute(
+            "SELECT c_alt_name_chn FROM ALTNAME_DATA "
+            "WHERE c_personid=? AND c_alt_name_chn IS NOT NULL", (pid_,))
+            if r[0]]
+        labels = []
+        if fem == 1:
+            labels.append("Female ≡ Person ⊓ isFemale.value(true)")
+        elif fem == 0:
+            labels.append("Male ≡ Person ⊓ isFemale.value(false)")
+        death_age = (dy - by) if (by and dy and dy > by) else None
+        basic = {
+            "personid": pid_, "iri": "", "nameChn": chn or "", "namePinyin": py or "",
+            "isFemale": None if fem is None else bool(fem),
+            "birthYear": by if by else None, "deathYear": dy if dy else None,
+            "deathAge": death_age, "indexYear": iy if iy else None,
+            "indexYearRule": "", "dynastyOf": dn[0] if dn else "",
+            "floruitStart": None, "floruitEnd": None,
+        }
+        return {"basic": basic, "alts": alts, "labels": labels,
+                "kin": [], "assoc": [], "tenure": [], "entry": [],
+                "addr": [], "status": [], "text": [], "source": []}
+    finally:
+        con.close()
+
+
+def person_detail_graph(g, pid):
+    """用 GraphIndex（只读 quadstore 索引）取单人的完整档案，返回与 person_detail 同构的 dict。
+
+    不走 owlready2 World（会长期持有 quadstore 写锁，与专题的只读索引冲突），
+    全部走 g 的谓词子图：g.o/g.d/g.rev/g.cname_of/g.name/g.s2pid 等。
+    """
+    pid = int(pid)
+    s = g.pid2s.get(pid)
+    if s is None:
+        return None
+
+    def _nm(x):
+        return g.name.get(x, "") if x is not None else ""
+
+    def _pid(x):
+        return g.s2pid.get(x) if x is not None else None
+
+    def _cname(x):
+        return g.cname_of(x)
+
+    def _tname(x):
+        return g.tname.get(x, "") if x is not None else ""
+
+    def y(v):
+        return v if v else None
+
+    def _parse_bool(x):
+        """quadstore 把 isFemale 存成文本 'true'/'false'（非布尔），
+        bool('false') 在 Python 里恒为 True，必须显式解析，否则全员变女。"""
+        if x is None or x == "":
+            return None
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, (int, float)):
+            return bool(x)
+        s = str(x).strip().lower()
+        if s in ("true", "1", "yes", "t"):
+            return True
+        if s in ("false", "0", "no", "f"):
+            return False
+        return None
+
+    fem = g.d("isFemale", s)
+    is_female = _parse_bool(fem)
+    basic = {
+        "personid": pid, "iri": "",
+        "nameChn": g.d("nameChn", s) or "", "namePinyin": g.d("namePinyin", s) or "",
+        "isFemale": is_female,
+        "birthYear": y(g.d("birthYear", s)), "deathYear": y(g.d("deathYear", s)),
+        "deathAge": y(g.d("deathAge", s)), "indexYear": y(g.d("indexYear", s)),
+        "indexYearRule": _cname((g.o("indexYearRule", s) or [None])[0]),
+        "dynastyOf": g.dynasty_of(s) or "",
+        "floruitStart": y(g.d("floruitStart", s)), "floruitEnd": y(g.d("floruitEnd", s)),
+    }
+    alts = list(g.Dm.get("altName", {}).get(s, []))
+
+    kin_rows = []
+    for k in g.rev("kinSource").get(s, []):
+        kt = (g.o("kinType", k) or [None])[0]
+        kin_rows.append(["出", _cname(kt), _nm((g.o("kinTarget", k) or [None])[0]),
+                         _pid((g.o("kinTarget", k) or [None])[0]),
+                         g.d("upStep", kt) or g.d("dwnStep", kt) or "",
+                         _tname((g.o("kinSourceText", k) or [None])[0])])
+    for k in g.rev("kinTarget").get(s, []):
+        kt = (g.o("kinType", k) or [None])[0]
+        kin_rows.append(["入", _cname(kt), _nm((g.o("kinSource", k) or [None])[0]),
+                         _pid((g.o("kinSource", k) or [None])[0]),
+                         g.d("upStep", kt) or g.d("dwnStep", kt) or "",
+                         _tname((g.o("kinSourceText", k) or [None])[0])])
+
+    assoc_rows = []
+    for a in g.rev("assocFrom").get(s, []):
+        assoc_rows.append(["出", _cname((g.o("assocType", a) or [None])[0]),
+                           _nm((g.o("assocTo", a) or [None])[0]),
+                           _pid((g.o("assocTo", a) or [None])[0]),
+                           y(g.d("assocFirstYear", a)), _nm((g.o("assocPlace", a) or [None])[0]),
+                           _cname((g.o("assocOccasion", a) or [None])[0]),
+                           _cname((g.o("assocTopic", a) or [None])[0]),
+                           _cname((g.o("assocGenre", a) or [None])[0])])
+    for a in g.rev("assocTo").get(s, []):
+        assoc_rows.append(["入", _cname((g.o("assocType", a) or [None])[0]),
+                           _nm((g.o("assocFrom", a) or [None])[0]),
+                           _pid((g.o("assocFrom", a) or [None])[0]),
+                           y(g.d("assocFirstYear", a)), _nm((g.o("assocPlace", a) or [None])[0]),
+                           _cname((g.o("assocOccasion", a) or [None])[0]),
+                           _cname((g.o("assocTopic", a) or [None])[0]),
+                           _cname((g.o("assocGenre", a) or [None])[0])])
+
+    tenure_rows = []
+    for t in g.rev("tenureHolder").get(s, []):
+        tenure_rows.append([
+            _nm((g.o("tenureOffice", t) or [None])[0]),
+            y(g.d("tenureFirstYear", t)), y(g.d("tenureLastYear", t)),
+            "、".join(_nm(x) for x in (g.o("tenurePlace", t) or [])),
+            _cname((g.o("apptType", t) or [None])[0]),
+            y(g.d("assumeStatus", t)),
+            _cname((g.o("officeCategoryOf", t) or [None])[0]),
+            y(g.d("tenureSequence", t))])
+
+    entry_rows, jinshi_hit = [], False
+    for e in g.rev("entryPerson").get(s, []):
+        mode = _cname((g.o("entryMode", e) or [None])[0])
+        if "進士" in (mode or ""):
+            jinshi_hit = True
+        entry_rows.append([mode, y(g.d("entryYear", e)), y(g.d("examRank", e)),
+                           y(g.d("examField", e)), y(g.d("entryAge", e))])
+
+    addr_rows = [[_cname((g.o("addrKind", c) or [None])[0]),
+                 _nm((g.o("addrPlace", c) or [None])[0]),
+                 y(g.d("addrFirstYear", c)), y(g.d("addrLastYear", c))]
+                for c in g.rev("addrPerson").get(s, [])]
+
+    status_rows = [[_cname((g.o("statusConcept", x) or [None])[0]),
+                    y(g.d("statusFirstYear", x)), y(g.d("statusLastYear", x))]
+                   for x in g.rev("statusPerson").get(s, [])]
+
+    text_rows = []
+    for l in g.rev("rolePerson").get(s, []):
+        tx = (g.o("roleText", l) or [None])[0]
+        text_rows.append([_cname((g.o("roleType", l) or [None])[0]),
+                          _tname(tx), y(g.d("textYear", tx))])
+
+    source_rows = [[_tname(t), y(g.d("textYear", t))] for t in g.o("sourceOf", s)]
+
+    labels = []
+    if tenure_rows:
+        labels.append("Official ≡ Person ⊓ ∃tenureHolder⁻¹.OfficeTenure")
+    if jinshi_hit:
+        labels.append("JinshiHolder ≡ Person ⊓ ∃entryMode.JinshiModes")
+    if tenure_rows and jinshi_hit:
+        labels.append("JinshiOfficial ≡ JinshiHolder ⊓ Official")
+    if is_female is True:
+        labels.append("Female ≡ Person ⊓ isFemale.value(true)")
+    elif is_female is False:
+        labels.append("Male ≡ Person ⊓ isFemale.value(false)")
+
+    return {"basic": basic, "alts": alts, "labels": labels,
+            "kin": kin_rows, "assoc": assoc_rows, "tenure": tenure_rows,
+            "entry": entry_rows, "addr": addr_rows, "status": status_rows,
+            "text": text_rows, "source": source_rows}
+
+
+def person_detail_auto(db, pid):
+    """自动选含该人的 quadstore，用 GraphIndex 取完整详情；找不到则回退源库基本信息。
+
+    返回 (data, note, source)：
+        data   —— 与 person_detail 同构的 dict（含 sections 用的各段 rows）
+        note   —— 人类可读说明（回退时告知「该朝代图谱未构建，仅基本信息」）
+        source —— 'quad'（完整）/ 'sql'（仅基本）/ 'none'（无此人）
+
+    ⚠️ 不再使用 owlready2 World（会持有 quadstore 写锁，与专题只读索引冲突）；
+       详情与专题统一走 GraphIndex，二者都是只读，互不阻塞。
+    """
+    pid = int(pid)
+    it = find_quad_with_person(pid)
+    if it:
+        try:
+            import kg_graph
+            g = kg_graph.get_index(it["path"])
+            d = person_detail_graph(g, pid)
+            if d:
+                return d, "", "quad"
+        except Exception:
+            pass
+    # 回退：源库基本信息（不依赖 quadstore，所有朝代通用）
+    b = person_basic_sql(db, pid)
+    if b is None:
+        return None, "未找到该人物（源库与所有图谱均无）。", "none"
+    return b, "该人物的朝代尚未构建语义图谱，以下仅显示源库基本信息（亲属/交遊/任职等详情不可用）。", "sql"
+
+
 # ============================================================ 导出
 def _safe(s):
     return re.sub(r'[\\/:*?"<>|\s]+', "_", str(s)).strip("_") or "x"
@@ -858,7 +1119,7 @@ def etl_out_path(dy):
 
 
 def run_etl(db, dy, limit=0):
-    """生成器：逐行产出 ETL 日志（供 Gradio 流式显示）。"""
+    """生成器：逐行产出 ETL 日志（供 HTTP SSE 流式显示）。"""
     global _etl_running
     if _etl_running:
         yield "⚠️ 已有构建任务在运行，请等待其结束。"

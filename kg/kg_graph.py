@@ -15,6 +15,7 @@ owlready2 自带的 SPARQL 解析器不支持尖括号 IRI 且大数据量慢，
 """
 import os
 import sqlite3
+import threading
 import time
 from collections import defaultdict, deque
 
@@ -231,22 +232,26 @@ class GraphIndex:
 
 
 _cache = {}
+_index_lock = threading.Lock()
 
 
 def get_index(path):
     if not path:
         return None
     if path not in _cache:
-        try:
-            _cache[path] = GraphIndex(path)
-        except sqlite3.OperationalError as e:
-            if "locked" not in str(e):
-                raise
-            # owlready2 的 World 会长期持有 quadstore 的写事务，
-            # 导致本进程的只读连接拿不到 SHARED 锁（database is locked）。
-            # 先关掉自己的 World 缓存再读；之后详情页会按需重建。
-            _release_world(path)
-            _cache[path] = GraphIndex(path)
+        # 大图谱（如 明 587MB）首次构建较慢；用锁避免并发请求重复构建
+        with _index_lock:
+            if path not in _cache:
+                try:
+                    _cache[path] = GraphIndex(path)
+                except sqlite3.OperationalError as e:
+                    if "locked" not in str(e):
+                        raise
+                    # owlready2 的 World 会长期持有 quadstore 的写事务，
+                    # 导致本进程的只读连接拿不到 SHARED 锁（database is locked）。
+                    # 先关掉自己的 World 缓存再读；之后详情页会按需重建。
+                    _release_world(path)
+                    _cache[path] = GraphIndex(path)
     return _cache[path]
 
 

@@ -8,9 +8,11 @@ abstract: >-
   associations, person life timeline, property-graph edge table), a materialized
   life-event interval table (LIFE_EVENT_RESOLVED) built from a Simple Temporal
   Problem with arc-consistency propagation, an Owlready2/RDF-OWL knowledge graph
-  (TBox v1.0 + Ming-dynasty seed quadstore), and two query front-ends (a Gradio
-  desktop console and a Vue 3 web console). No database binaries are stored in
-  the repository; all data must be downloaded from the official CBDB channels.
+  (TBox v1.0 + Ming-dynasty seed quadstore), and a Vue 3 web query console with
+  three modes (view search, person chronicle, and knowledge-graph exploration
+  serving topics Q1-Q9, force-directed graphs, CSV export and streaming ETL).
+  No database binaries are stored in the repository; all data must be downloaded
+  from the official CBDB channels.
 type: software
 authors:
   - alias: miyamaerei

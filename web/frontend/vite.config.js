@@ -9,6 +9,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // 知识图谱 API（kg/api_server.py :8799）—— 必须放在 /api 之前以优先匹配
+      '/api/kg': {
+        target: 'http://127.0.0.1:8799',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://127.0.0.1:8787',
         changeOrigin: true,

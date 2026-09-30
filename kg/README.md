@@ -1,10 +1,15 @@
-# CBDB 知识图谱（Owlready2 + RDF/OWL + Gradio 查询台）
+# CBDB 知识图谱（Owlready2 + RDF/OWL + Vue 查询台）
 
 在 CBDB 的 SQLite 关系库之上叠一层**语义层**：把 KIN / ASSOC / POSTING / ENTRY / BIOG_ADDR /
 STATUS / BIOG_TEXT 七张表 hub 化成 RDF/OWL 断言，做成 quadstore，再配一台查询台做
 亲缘、师承、同年、任官、学派这类**网络型**查询——这些用纯 SQL 写起来动辄十几层自连接。
 
-本体设计见 [`TBOX_v1.0.md`](./TBOX_v1.0.md)（**已冻结**）；界面代码结构见 [`app/README.md`](./app/README.md)。
+本体设计见 [`TBOX_v1.0.md`](./TBOX_v1.0.md)（**已冻结**）。
+
+> **界面已迁到 Vue**：原来的 Gradio 界面（`kg/app/` + `app_gradio.py`）已删除，
+> 功能全部并入 `web/` 的 Vue 查询台顶栏「知识图谱」模式（`web/frontend/src/components/KgExplorer.vue`）。
+> 本目录只保留**逻辑层 + HTTP 接口**：`api_server.py`（端口 8799）把检索/详情/专题/导出/构建
+> 以 REST 形式暴露，`web/server.py` 同源反代 `/api/kg/*`。
 
 > 与 `web/` 查询台的分工：`web/` 面向**关系表横向检索**（24 个视图、按列自动生成条件），
 > `kg/` 面向**图上的多跳遍历**（A 的师承链、同年进士、学派网络）。两者的数据底座是同一个源库。
@@ -14,26 +19,34 @@ STATUS / BIOG_TEXT 七张表 hub 化成 RDF/OWL 断言，做成 quadstore，再�
 ## 0. 快速开始
 
 ```bash
-# 依赖（仓库根目录）
-pip install -r requirements.txt   # gradio + owlready2 + zhconv
-# 端到端冒烟测试另需：pip install gradio_client
+# 依赖（仓库根目录）：owlready2（ETL/本体）+ zhconv（简繁）。Gradio 已移除，不再需要。
+pip install -r requirements.txt
 
 # 1) 构建知识图谱（默认明朝 c_dy=19），产物 kg/quadstore/cbdb_dy19.sqlite3 + 同名 .meta.json
 python kg/etl_seed_ming.py --db cbdb_20260926.sqlite3 --dy 19
 
-# 2) 启动查询台（13 个 Tab），打开 http://127.0.0.1:7860
-python kg/app_gradio.py --port 7860
+# 2) 启动知识图谱接口服务（端口 8799）
+#    ⚠️ 必须用装了 owlready2 / zhconv 的解释器（本机是托管 venv）
+<venv>/Scripts/python.exe kg/api_server.py --port 8799        # Windows
+<venv>/bin/python         kg/api_server.py --port 8799        # macOS / Linux
+
+# 3) 启动 web 查询台（端口 8787），它会把 /api/kg/* 反代到 8799
+python web/server.py --port 8787
+# 浏览器打开 http://127.0.0.1:8787 → 顶栏切到「知识图谱」
 ```
 
 > ⚠️ **`python` 必须和装依赖的是同一个解释器。** 两者不一致时会报
-> `ModuleNotFoundError: No module named 'gradio'`——包明明装了，只是没装在这个解释器里。
-> 用虚拟环境时改成显式指定：
+> `ModuleNotFoundError: No module named 'owlready2'`（或 `zhconv`）——包明明装了，
+> 只是没装在这个解释器里。用虚拟环境时改成显式指定：
 > ```bash
-> <venv>/Scripts/python.exe kg/app_gradio.py --port 7860    # Windows
-> <venv>/bin/python         kg/app_gradio.py --port 7860    # macOS / Linux
+> <venv>/Scripts/python.exe kg/api_server.py --port 8799    # Windows
+> <venv>/bin/python         kg/api_server.py --port 8799    # macOS / Linux
 > ```
 > 查当前解释器：`python -c "import sys; print(sys.executable)"`。
-> `app_gradio.py` 已内置依赖自检，缺包时会直接打印当前解释器路径与解决办法。
+> 两个服务都要常驻（用后台方式启动，别用会被回收的子壳）。
+
+> **也可以不启接口服务**：Web 查询台的「构建」页能直接在界面上跑 ETL（SSE 流式日志）；
+> 但检索/详情/专题/导出必须走 8799 接口服务。
 
 源库（`cbdb_20260926.sqlite3`）需先按仓库根 [`README.md`](../README.md) §5.2 准备好。
 **`kg/quadstore/` 与 `kg/exports/` 都被 `.gitignore` 排除**——图谱是本地构建产物，不入仓。
@@ -192,86 +205,52 @@ python -c "import kg_query"          # 只验证能否导入
 | Q8 | `q8_book` | 著作来源 | 一本书记了哪些人 |
 | Q9 | `q9_topic` | 学派 / 主题网络 | 概念节点 + 关联人物 |
 
-> 加第 10 个查询：在 `kg_query.py` 加函数 → 在 `app/specs.py` 加一条 `QuerySpec`，
-> 页面自动生成（详见 [`app/README.md`](./app/README.md)）。
+> 加第 10 个查询：在 `kg_query.py` 加函数 → 在 `topic_dispatcher.py` 的 `TOPIC_SCHEMA`
+> 加一条声明（key / tab / hint / btn / fields）并在 `run_topic()` 里接上，
+> 前端表单由该 schema 自动渲染（无需改 Vue 代码）。
 
 **⚠️ 稀疏字段实测（明）**：`assocTopic` 25 条 / `assocGenre` 0 条 / `assocOccasion` 12 条。
 所以 Q9 主题类查询必须走 `assocType` 的名称，别指望 topic/genre 字段有数据。
 
 ---
 
-## 6. Gradio 查询台（13 个 Tab）
+## 6. Vue 查询台（顶栏「知识图谱」）
 
-```bash
-python kg/app_gradio.py [--port 7860] [--host 127.0.0.1] [--share] [--no-browser]
-```
+Gradio 界面已删除。现在 GraphIndex 之上只暴露 HTTP 接口，界面完全在 `web/`：
+
+| 位置 | 文件 |
+|---|---|
+| 接口服务 | `kg/api_server.py`（端口 8799） |
+| 同源反代 | `web/server.py` 的 `_proxy_kg()`（`/api/kg/*`） |
+| 前端 | `web/frontend/src/components/KgExplorer.vue`（检索 / 详情 / 专题 / 导出 / 构建） |
+| 力导向图 | `web/frontend/src/components/KgGraph.vue`（vis-network） |
+
+**五个内部 Tab**
 
 | Tab | 内容 |
 |---|---|
-| 🔍 查询 | 按姓名（简繁自动扩展）/ 朝代 / 生卒年区间 / 进士 / 官员检索；排序 / 显示列 / 行高在「⚙ 更多条件」里；点结果行跳详情 |
-| 📄 详情 | 人物档案 8 个分区表（TBox 语义，如「曾任官职」节点带年份与任命类型） |
-| 📦 导出 | 把当前查询条件与结果导出成 CSV / JSON |
-| ① ～ ⑨ | 对应 Q1–Q9 的九个专题页（**一份渲染器 + 声明式 `QuerySpec` 驱动**） |
-| ⚙️ 构建 | 界面上直接跑 ETL 构建新朝代图谱（流式显示进度） |
+| 检索 | 按姓名（简繁自动扩展 + 别名/字号回退链）/ 朝代 / 生卒区间 / 进士 / 官员检索；点行跳详情 |
+| 详情 | 人物档案 8 个分区表（亲属/交遊/任职/入仕/地址/身份/著作/史料）；无图谱时回退源库基本信息 |
+| 专题 | Q1–Q9，表单由 `topic_dispatcher.TOPIC_SCHEMA` 自动渲染；**Q3/Q9 额外出力导向图** |
+| 导出 | 把当前检索条件命中的人物导出 CSV（utf-8-sig，ASCII 文件名） |
+| 构建 | 界面上跑 ETL 构建新朝代图谱，**SSE 流式显示日志**，完成后自动刷新图谱清单 |
 
-界面代码的分层架构、AppCtx 共享方式、以及 Gradio 6 的几个静默失败坑，
-见 [`app/README.md`](./app/README.md)。
+接口一览（前端走同源相对路径，由 `web/server.py` 反代到 8799）：
 
-**CBDB 是繁体库**：搜「王阳明」0 命中，要搜「王守仁」或勾上「别名参与匹配」再搜「陽明」。
-脚本已做 简→繁→原样 三写扩展（`zhconv`，未安装时退化为原样匹配），但**别名回退链**
-（原名 → 别名 → 去姓氏 + 别名）仍需在检索时开启对应开关。
-
-### 6.1 界面布局：三区分离
-
-> 设计依据与 web 端 [`web/FILTER_UX.md`](../web/FILTER_UX.md) 同源。问题是同一个：
-> **条件占满了垂直空间，结果表只剩半屏**。改版前查询页平铺了 4 行控件
-> （朝代+上限 / 姓名+拼音+性别 / 6 个年份 / 4 个复选框）+ 按钮 + 两段提示，
-> 9 个专题页顶部还各有一段两行的 SPARQL 说明，而表格高度是 Gradio 默认的 500px。
-
-```
-┌ 图谱行（一行）──── 知识图谱下拉 · 🔄 刷新 · 规模统计 ──────────────┐
-├ 工具栏（恒一行）── 姓名 · 朝代 · 最多返回 · 🔍 查询 ───────────────┤
-├ 命中提示（一行）── 命中数 · 排序 · 耗时 · **已生效条件摘要** ──────┤
-├ ⚙ 更多条件（默认折叠）拼音 / 性别 / 6 个年份 / 4 个开关 / 排序 / 显示列 / 行高 ┤
-└ 结果表（吃满剩余高度 · 表头吸顶 · ID+姓名固定 · 表内快搜）─────────┘
-```
-
-两条刻意的取舍：
-
-- **条件可以收起来，但「筛了什么」必须一直看得见** —— 折叠区的状态回显在命中提示那行
-  （`K.cond_summary`）：`朝代=明 | 姓名含「王」| 上限=500`。等价于 web 端工具栏那排 chips；
-  否则用户不知道结果为什么是这些。
-- **Gradio 的 Dataframe 点不了表头排序**，所以排序做成折叠区里的「排序 + 方向」两个控件，
-  改动即自动重查（等价于 web 端点表头的即时反馈）。年份列里 `0 = 未知`，
-  SQL 用 `CASE WHEN x > 0 THEN 0 ELSE 1 END` 把未知值压到末尾，否则「按生年升序」第一屏全是未知。
-
-### 6.2 结果表的表头与显示增强
-
-| 能力 | 做法 | 对应 web 端 |
+| 方法 | 路径 | 说明 |
 |---|---|---|
-| 中文表头 | `RESULT_HEADER_ZH`（`personid` → `ID`）；导出 CSV 仍用原始列名 | 主显中文名 |
-| 显示列开关 | `CheckboxGroup` 勾选；`trim_rows()` 只裁输出层，**不重新查库**（`qstate` 存完整 14 列） | 「列 14/91」 |
-| 固定列 | `pinned_columns` 钉住 ID 与姓名，横拉时仍认得出是哪一行 | 🔗 关联键 |
-| 列宽控制 | `column_widths`：ID 6% / 姓名 12% / 性别 5% … 窄列不浪费宽度 | — |
-| 行密度 | 「紧凑行高」开关 → 切换 `kg-df` / `kg-df.kg-cozy` 两个 CSS 档 | `≣ / ≡` |
-| 表内快搜 | `show_search="search"`：已在结果里再过滤，不打库 | 全局搜索框 |
-| 吃满高度 | 表头 `sticky` + `max-height: max(280px, calc(100vh - 350px))` | 结果区 `flex:1` |
+| GET | `/api/kg/health` · `/dynasties` · `/quads` · `/topics` | 元信息与下拉选项 |
+| GET | `/api/kg/person/<id>` | 人物详情（自动选含该人的图谱；找不到则回退源库） |
+| POST | `/api/kg/search` | 检索（含简繁 + 别名/字号回退链） |
+| POST | `/api/kg/topic` | Q1–Q9 专题查询 |
+| POST | `/api/kg/export` | 导出 CSV |
+| POST | `/api/kg/build` | ETL 构建（**SSE 流式**，结束后关闭连接以终止流） |
 
-**ID 与姓名是锁定列**，永远显示且排在最前：查询页「点一行载入详情」读的是第 0 列
-（`handlers.pick_row`），一旦把 ID 藏了，行点击就会取到别的字段。
+> ⚠️ **SSE 必须显式 `close_connection = True`**：请求是 HTTP/1.1，默认 keep-alive，
+> 不关的话上游永远不发 EOF，代理的分块转发循环读不到结束 → 前端流一直挂起。
 
-### 6.3 样式从哪来
-
-`app/theme.py` 是唯一的样式来源（约 96 行 CSS）。**Gradio 6 已把 `css` / `css_paths` / `head`
-从 `Blocks()` 挪到 `launch()`**，所以走双保险：
-
-- `app_gradio.py` → `launch(css=theme.CSS)`
-- `app/__init__.py:inject_css()` → 一个 `gr.HTML("<style>…</style>")` 组件
-
-这样脚本化启动、回归测试、`gradio_client` 起的服务都带样式。选择器基于 Gradio 6 的实际 DOM
-（结果表是 `.table-wrap > table`，表头行 `.tr-head`；Tab 是 `.tab-header` / `.tab-container`），
-需要覆盖的地方一律 `!important` —— Dataframe 会把 `max_height` 写成行内样式，
-而样式表里的 `!important` 正是唯一能压过行内普通声明的写法。
+**CBDB 是繁体库**：搜「王阳明」原名 0 命中，靠 `search_persons_fallback` 的自动回退链
+（原名 → 别名 → 去姓氏 + 字号）命中「王守仁」。新接口必须走这套，别只调 `search_persons`。
 
 ---
 
@@ -282,10 +261,12 @@ python kg/app_gradio.py [--port 7860] [--host 127.0.0.1] [--share] [--no-browser
 python kg/kg_stats.py --quad kg/quadstore/cbdb_dy19.sqlite3
 python kg/kg_stats.py --sample 王守仁           # 额外跑抽检查询
 
-# 端到端冒烟：需先启动服务，跑一遍所有页面的关键链路，打印 PASS / FAIL
-python kg/app_gradio.py --port 7860 --no-browser
-python kg/smoke_test.py                         # 默认 127.0.0.1:7860 / pid 30374
-python kg/smoke_test.py --pid 25403 --quad cbdb_dy53 --name 王安石
+# 接口自检（需先启动 8799 接口服务；本机 localhost 有代理，curl 要加 --noproxy '*'）
+curl --noproxy '*' http://127.0.0.1:8799/api/kg/health
+curl --noproxy '*' http://127.0.0.1:8799/api/kg/quads
+curl --noproxy '*' -X POST http://127.0.0.1:8799/api/kg/search \
+     -H 'Content-Type: application/json' -d '{"dy":19,"name":"王阳明","limit":5}'
+curl --noproxy '*' http://127.0.0.1:8799/api/kg/person/30374
 ```
 
 冒烟测试必须走 HTTP 而非手动点界面——手动测不出「浏览器实际提交值」（如空 Number 会变成 `0`）。
@@ -321,13 +302,12 @@ kg/
   TBOX_v1.0.md           本体设计冻结文档 ★改本体先改这里
   etl_seed_ming.py       种子集 ETL（默认明朝，--dy 可换朝代）
   kg_graph.py            quadstore → 内存谓词子图索引（GraphIndex）
-  kg_query.py            Q1–Q9 专题查询实现（不依赖 Gradio，可单独自检）
+  kg_query.py            Q1–Q9 专题查询实现（不依赖界面，可单独自检）
   kg_backend.py          三层数据后端：检索 / 详情 / 导出 / 跑 ETL
+  topic_dispatcher.py    Q1–Q9 的调度层：TOPIC_SCHEMA（JSON 字段规格）+ run_topic()
+  api_server.py          HTTP 接口服务（端口 8799），把上面这些暴露成 /api/kg/*
   kg_stats.py            图谱验收：计数对账 + 抽检
-  smoke_test.py          端到端冒烟测试（走 HTTP，需服务已启动）
-  app_gradio.py          查询台入口（瘦，约 40 行）
-  app/                   查询台 UI（分层结构见 app/README.md）
-    theme.py             样式唯一来源（布局/密度 CSS，由 launch(css=) 注入）
+  etl_run.log            ETL 日志（gitignore 内可选保留）
   quadstore/             图谱产物 ★gitignore
   exports/               导出产物 ★gitignore（含本机绝对路径）
 ```
@@ -336,12 +316,13 @@ kg/
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `ModuleNotFoundError: No module named 'gradio'` | **运行用的 python ≠ 装依赖的 python**。依赖装在 venv 里、`python` 却指向系统/基础解释器时必然如此。用 `<venv>/Scripts/python.exe` 显式运行，见 §0；`app_gradio.py` 也有依赖自检会提示 |
-| 点「详情」后点专题页失败 | owlready2 World 持股写锁 → `kg_graph.get_index()` 会自动释放缓存重读；仍失败则重启应用 |
+| `ModuleNotFoundError: No module named 'owlready2'`（或 `zhconv`） | **运行用的 python ≠ 装依赖的 python**。依赖装在 venv 里、`python` 却指向系统/基础解释器时必然如此。用 `<venv>/Scripts/python.exe` 显式运行，见 §0 |
+| `/api/kg/*` 返回 502「知识图谱服务不可达」 | 8799 的 `api_server.py` 没起（或被回收）。用常驻后台方式启动，别用会被回收的 `&` 子壳 |
+| 专题查询很慢（首次十几秒） | GraphIndex 首次构建要把谓词子图抽进内存（明 587MB 约几秒）。已用双检锁避免并发重复构建，之后都是字典查找 |
+| 点详情/专题报 `database is locked` | 详情页已改走 GraphIndex 只读连接，**不再开 owlready2 World**（World 会长期占写锁）。若 ETL 正在跑，等它结束 |
 | 下拉里默认图谱不是明朝 | `quad_choices()` 按**三元组数降序**排（规模优先）。曾按构建时间倒序，导致刚建的「周」小图谱成默认值，查王守仁报「图谱中未找到」 |
-| 各朝代图谱都没有这个人 | 详情页会依次去别的图谱探测（`quad_has_person`，毫秒级轻量探测，不开 World） |
-| 搜简体字 0 命中 | CBDB 全库繁体。已做简繁扩展，但姓名还需走别名回退链 |
+| 各朝代图谱都没有这个人 | 详情页会依次去别的图谱探测（`quad_has_person`，毫秒级轻量探测，不开 World），找不到则回退源库基本信息 |
+| 搜简体字 0 命中 | CBDB 全库繁体。已做简繁扩展，但姓名还需走别名/字号回退链（`search_persons_fallback`） |
 | 校验报 `database is locked` | `kg_stats.py` 要在 ETL 完全结束后跑，两者不能同时占用 quadstore |
-| 界面文字/主题改不动 | ⚠️ Gradio 6 的 `theme`、`css`、`css_paths`、`head` **只能放 `launch()`，不能放 `Blocks()`**（早期版本相反）；`show_api` 参数已移除。样式改 `app/theme.py`，见 §6.3 |
-| 排序选了「升序」却像降序 | 布尔入参必须过 `handlers._bool()`：进 API 层时枚举型 Radio 会被序列化成字符串，`bool("False")` 是 **True** |
-| 表格高度没跟着视口变 | Dataframe 的 `max_height` 会被 Gradio 写成行内样式，只有样式表里的 `!important` 能压过它，见 §6.3 |
+| 详情页性别显示为「女」/「未詳」 | quadstore 把 `isFemale` 存成**文本** `"true"`/`"false"`，`bool("false")` 是 `True`。已用 `_parse_bool()` 显式解析，改这类字段时别直接用 `bool()` |
+| 构建页日志一直转圈不结束 | SSE 上游必须 `close_connection = True`（HTTP/1.1 默认 keep-alive 不发 EOF），否则代理的分块流读不到结束，见 §6 |
