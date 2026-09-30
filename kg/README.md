@@ -14,9 +14,9 @@ STATUS / BIOG_TEXT 七张表 hub 化成 RDF/OWL 断言，做成 quadstore，再�
 ## 0. 快速开始
 
 ```bash
-# 依赖
-pip install owlready2 gradio zhconv
-pip install gradio_client        # 仅端到端冒烟测试需要
+# 依赖（仓库根目录）
+pip install -r requirements.txt   # gradio + owlready2 + zhconv
+# 端到端冒烟测试另需：pip install gradio_client
 
 # 1) 构建知识图谱（默认明朝 c_dy=19），产物 kg/quadstore/cbdb_dy19.sqlite3 + 同名 .meta.json
 python kg/etl_seed_ming.py --db cbdb_20260926.sqlite3 --dy 19
@@ -24,6 +24,16 @@ python kg/etl_seed_ming.py --db cbdb_20260926.sqlite3 --dy 19
 # 2) 启动查询台（13 个 Tab），打开 http://127.0.0.1:7860
 python kg/app_gradio.py --port 7860
 ```
+
+> ⚠️ **`python` 必须和装依赖的是同一个解释器。** 两者不一致时会报
+> `ModuleNotFoundError: No module named 'gradio'`——包明明装了，只是没装在这个解释器里。
+> 用虚拟环境时改成显式指定：
+> ```bash
+> <venv>/Scripts/python.exe kg/app_gradio.py --port 7860    # Windows
+> <venv>/bin/python         kg/app_gradio.py --port 7860    # macOS / Linux
+> ```
+> 查当前解释器：`python -c "import sys; print(sys.executable)"`。
+> `app_gradio.py` 已内置依赖自检，缺包时会直接打印当前解释器路径与解决办法。
 
 源库（`cbdb_20260926.sqlite3`）需先按仓库根 [`README.md`](../README.md) §5.2 准备好。
 **`kg/quadstore/` 与 `kg/exports/` 都被 `.gitignore` 排除**——图谱是本地构建产物，不入仓。
@@ -273,6 +283,7 @@ kg/
 
 | 现象 | 原因 / 处理 |
 |---|---|
+| `ModuleNotFoundError: No module named 'gradio'` | **运行用的 python ≠ 装依赖的 python**。依赖装在 venv 里、`python` 却指向系统/基础解释器时必然如此。用 `<venv>/Scripts/python.exe` 显式运行，见 §0；`app_gradio.py` 也有依赖自检会提示 |
 | 点「详情」后点专题页失败 | owlready2 World 持股写锁 → `kg_graph.get_index()` 会自动释放缓存重读；仍失败则重启应用 |
 | 下拉里默认图谱不是明朝 | `quad_choices()` 按**三元组数降序**排（规模优先）。曾按构建时间倒序，导致刚建的「周」小图谱成默认值，查王守仁报「图谱中未找到」 |
 | 各朝代图谱都没有这个人 | 详情页会依次去别的图谱探测（`quad_has_person`，毫秒级轻量探测，不开 World） |

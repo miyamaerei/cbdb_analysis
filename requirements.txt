@@ -1,0 +1,19 @@
+# CBDB 知识图谱查询台（kg/）依赖
+#
+# 安装：
+#     pip install -r requirements.txt
+#
+# ⚠️ 最容易踩的坑：**「运行 app_gradio.py 的 python」必须和「执行 pip install 的 python」
+#    是同一个解释器**。两者不一致时，包明明装了却报
+#         ModuleNotFoundError: No module named 'gradio'
+#    查当前用的是哪个解释器：
+#         python -c "import sys; print(sys.executable)"
+#    指定解释器运行（Windows 用 venv 时）：
+#         <venv>\Scripts\python.exe kg\app_gradio.py --port 7860
+
+gradio>=6.0,<7.0        # 查询台界面框架（本项目基于 6.29 开发，theme 只能放 launch()）
+owlready2>=0.45         # RDF/OWL 本体与 quadstore（TBox v1.0，本项目基于 0.51）
+zhconv>=1.4             # 简繁转换：CBDB 全库是繁体，用户常输简体
+
+# --- 以下仅端到端冒烟测试 kg/smoke_test.py 需要，按需启用 ---
+# gradio_client>=2.0

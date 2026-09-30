@@ -10,12 +10,30 @@
 文件结构见 `kg/app/README.md`。
 """
 import argparse
+import importlib.util
 import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
+
+# ---- 依赖自检：缺包时给出可操作的提示，而不是裸 ModuleNotFoundError ----
+# 最常见的坑：装依赖用的 python 和运行本脚本的 python 不是同一个解释器。
+_MISSING = [m for m in ("gradio", "owlready2", "zhconv")
+            if importlib.util.find_spec(m) is None]
+if _MISSING:
+    sys.exit(
+        f"[依赖缺失] 当前解释器缺少：{', '.join(_MISSING)}\n"
+        f"  当前 python：{sys.executable}\n"
+        "  常见原因：「运行用的 python」不是「装依赖的那个 python」。\n"
+        "  解决办法：\n"
+        "    1) 先在仓库根目录装依赖：  pip install -r requirements.txt\n"
+        "    2) 或直接用装了依赖的解释器运行：\n"
+        "         Windows    : <venv>\\Scripts\\python.exe kg\\app_gradio.py --port 7860\n"
+        "         macOS/Linux: <venv>/bin/python kg/app_gradio.py --port 7860\n"
+        "  查当前解释器路径： python -c \"import sys; print(sys.executable)\"\n"
+    )
 
 import gradio as gr                    # noqa: E402
 

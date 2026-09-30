@@ -181,9 +181,14 @@ app.build_ui()                        建 State → 按 Tab 顺序建页 → 连
 
 - **Python** ≥ 3.10
   ```bash
-  pip install gradio owlready2 zhconv
-  # 端到端自测可选：pip install gradio_client
+  pip install -r requirements.txt
+  # gradio + owlready2 + zhconv；端到端自测另需：pip install gradio_client
   ```
+  > ⚠️ **运行脚本的 python 必须和装依赖的是同一个解释器**，否则会报
+  > `ModuleNotFoundError: No module named 'gradio'`（包装了，但没装在那个解释器里）。
+  > 用虚拟环境时显式指定：`<venv>/Scripts/python.exe kg/app_gradio.py --port 7860`（Windows）/
+  > `<venv>/bin/python kg/app_gradio.py --port 7860`。查当前解释器：
+  > `python -c "import sys; print(sys.executable)"`。
 - **前端**（仅 Web 查询台需要，Gradio 台不需要）：Node.js + npm
   ```bash
   cd web/frontend && npm install && npm run build   # 产出 dist/，交给 server.py 托管
@@ -242,6 +247,7 @@ python kg/etl_seed_ming.py --db cbdb_20260926.sqlite3 --dy 19
 ```
 cbdb_sqlite/
 ├── README.md                本文件
+├── requirements.txt         Python 依赖（gradio / owlready2 / zhconv，kg 查询台用）
 ├── LICENSE                  许可法律条款（CC BY-NC-SA 4.0）
 ├── NOTICE.md                版权声明 / CBDB 引用要求 / 免责声明
 ├── CITATION.cff             机器可读引用元数据（GitHub「Cite this repository」）
